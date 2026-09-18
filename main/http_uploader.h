@@ -11,7 +11,7 @@
 #include "qma7981.h"
 
 /* 服务器配置（根据实际情况修改） */
-#define SERVER_URL          "http://your-server.com/api/imu"  /* 服务器 API 地址 */
+#define SERVER_URL          "http://10.1.41.179:5000/api/imu"  /* 服务器 API 地址 */
 #define HTTP_TIMEOUT_MS     5000   /* HTTP 请求超时时间 */
 
 /**

@@ -11,8 +11,8 @@
 #include <stdbool.h>
 
 /* WiFi 配置（根据实际情况修改） */
-#define WIFI_SSID       "Crystalline"       /* WiFi 名称 */
-#define WIFI_PASS       "159357asdf"        /* WiFi 密码 */
+#define WIFI_SSID       "431"               /* WiFi 名称 */
+#define WIFI_PASS       "88888888"          /* WiFi 密码 */
 #define WIFI_MAX_RETRY  10              /* 最大重试次数 */
 
 /**
