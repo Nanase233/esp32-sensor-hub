@@ -6,6 +6,7 @@
  *   2. 连接 WiFi
  *   3. 持续采集 IMU 数据并上传服务器
  *   4. 串口同步输出（调试用）
+ *   5. 按键触发与物理反馈（第 3 周任务）
  */
 
 #include <stdio.h>
@@ -19,6 +20,7 @@
 #include "wifi_manager.h"
 #include "http_uploader.h"
 #include "command_handler.h"
+#include "button_handler.h"
 
 static const char *TAG = "MAIN";
 
@@ -57,7 +59,11 @@ void app_main(void)
     ESP_LOGI(TAG, "启动命令处理器...");
     command_handler_init();
 
-    /* 4. 主循环：采集 + 上传 */
+    /* 4. 启动按键处理器（第 3 周任务） */
+    ESP_LOGI(TAG, "启动按键处理器...");
+    button_handler_init();
+
+    /* 5. 主循环：采集 + 上传 */
     qma7981_data_t accel;
     uint32_t sample_count = 0;
     uint32_t upload_count = 0;

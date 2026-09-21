@@ -170,6 +170,55 @@
             margin-top: 30px;
             opacity: 0.8;
         }
+
+        /* 求助面板样式 */
+        .help-item {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-left: 4px solid #667eea;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .help-item.status-pending { border-left-color: #ffa726; }
+        .help-item.status-responded { border-left-color: #66bb6a; }
+        .help-item.status-cancelled { border-left-color: #ef5350; }
+
+        .help-info { flex: 1; }
+        .help-info .help-msg { font-weight: bold; color: #333; margin-bottom: 5px; }
+        .help-info .help-meta { font-size: 0.85em; color: #666; }
+
+        .help-actions { display: flex; gap: 8px; }
+
+        .help-actions button {
+            padding: 6px 14px;
+            font-size: 0.85em;
+            border-radius: 4px;
+        }
+
+        .btn-respond {
+            background: linear-gradient(135deg, #66bb6a, #43a047) !important;
+        }
+
+        .btn-cancel {
+            background: linear-gradient(135deg, #ef5350, #e53935) !important;
+        }
+
+        .help-status-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: bold;
+            color: white;
+        }
+
+        .badge-pending { background: #ffa726; }
+        .badge-responded { background: #66bb6a; }
+        .badge-cancelled { background: #ef5350; }
     </style>
 </head>
 <body>
@@ -197,6 +246,14 @@
             <h2>📋 采集任务</h2>
             <div id="task-list">
                 <p style="color: #999;">暂无任务</p>
+            </div>
+        </div>
+
+        <!-- 求助请求面板 -->
+        <div class="card">
+            <h2>🆘 求助请求</h2>
+            <div id="help-list">
+                <p style="color: #999;">暂无求助请求</p>
             </div>
         </div>
 
@@ -426,10 +483,12 @@
         updateData();
         updateStats();
         updateTaskList();
+        updateHelpList();
 
-        // 每 5 秒更新统计和任务列表
+        // 每 5 秒更新统计、任务列表和求助列表
         setInterval(updateStats, 5000);
         setInterval(updateTaskList, 2000);
+        setInterval(updateHelpList, 2000);
 
         // ==================== 远程采集功能 ====================
 
@@ -552,6 +611,107 @@
                 }
             } catch (e) {
                 console.error('获取任务列表失败:', e);
+            }
+        }
+
+        // ==================== 求助请求功能 ====================
+
+        // 更新求助请求列表
+        async function updateHelpList() {
+            try {
+                const resp = await fetch('/api/help');
+                if (resp.ok) {
+                    const result = await resp.json();
+                    const container = document.getElementById('help-list');
+
+                    if (result.requests.length === 0) {
+                        container.innerHTML = '<p style="color: #999;">暂无求助请求</p>';
+                        return;
+                    }
+
+                    const statusText = {
+                        'pending': '等待回应',
+                        'responded': '已回应',
+                        'cancelled': '已取消'
+                    };
+
+                    const badgeClass = {
+                        'pending': 'badge-pending',
+                        'responded': 'badge-responded',
+                        'cancelled': 'badge-cancelled'
+                    };
+
+                    let html = '';
+                    result.requests.forEach(req => {
+                        const time = req.created_at ? new Date(req.created_at * 1000).toLocaleString() : '--';
+                        const badge = `<span class="help-status-badge ${badgeClass[req.status] || ''}">${statusText[req.status] || req.status}</span>`;
+
+                        html += `<div class="help-item status-${req.status}">`;
+                        html += `<div class="help-info">`;
+                        html += `<div class="help-msg">${req.message}</div>`;
+                        html += `<div class="help-meta">设备: ${req.device_id || '未知'} | 时间: ${time} | ID: ${req.request_id}</div>`;
+                        if (req.status === 'responded' && req.response_msg) {
+                            html += `<div class="help-meta" style="color: #43a047;">回应: ${req.response_msg}</div>`;
+                        }
+                        html += `</div>`;
+                        html += `<div class="help-actions">`;
+                        html += badge;
+                        if (req.status === 'pending') {
+                            html += `<button class="btn-respond" onclick="respondHelp('${req.request_id}')">回应</button>`;
+                            html += `<button class="btn-cancel" onclick="cancelHelp('${req.request_id}')">取消</button>`;
+                        }
+                        html += `</div>`;
+                        html += `</div>`;
+                    });
+
+                    container.innerHTML = html;
+                }
+            } catch (e) {
+                console.error('获取求助列表失败:', e);
+            }
+        }
+
+        // 回应求助请求
+        async function respondHelp(requestId) {
+            const msg = prompt('请输入回应内容:', '收到，马上来！');
+            if (msg === null) return; // 用户取消
+
+            try {
+                const resp = await fetch(`/api/help/${requestId}/respond`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({response_msg: msg})
+                });
+                if (resp.ok) {
+                    alert('已回应求助请求');
+                    updateHelpList();
+                } else {
+                    alert('回应失败');
+                }
+            } catch (e) {
+                console.error('回应失败:', e);
+                alert('网络错误');
+            }
+        }
+
+        // 取消求助请求
+        async function cancelHelp(requestId) {
+            if (!confirm('确定要取消此求助请求吗？')) return;
+
+            try {
+                const resp = await fetch(`/api/help/${requestId}/cancel`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                if (resp.ok) {
+                    alert('已取消求助请求');
+                    updateHelpList();
+                } else {
+                    alert('取消失败');
+                }
+            } catch (e) {
+                console.error('取消失败:', e);
+                alert('网络错误');
             }
         }
     </script>

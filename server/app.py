@@ -7,6 +7,7 @@ IMU 数据接收服务器
   3. 提供 REST API 查询数据
   4. 提供 Web 页面实时展示
   5. 远程采集指令与执行结果反馈
+  6. 按键触发与物理反馈闭环（第 3 周任务）
 
 启动：python app.py
 访问：http://localhost:5000
@@ -72,6 +73,22 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_task_status ON collection_tasks(status)
     """)
 
+    # 求助请求表（第 3 周任务）
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS help_requests (
+            request_id TEXT PRIMARY KEY,
+            device_id TEXT,
+            message TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at REAL NOT NULL,
+            responded_at REAL,
+            response_msg TEXT
+        )
+    """)
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_help_status ON help_requests(status)
+    """)
+
     conn.commit()
     conn.close()
     print("[DB] 数据库初始化完成")
@@ -94,7 +111,7 @@ def receive_imu():
     required_fields = ["timestamp", "ax", "ay", "az"]
     for field in required_fields:
         if field not in data:
-            return jsonify({"error": f"缺少字段: {field}"}), 400
+            return jsonify({"error": f"缺少字段：{field}"}), 400
 
     request_id = data.get("request_id")
 
@@ -378,6 +395,141 @@ def get_all_tasks():
     return jsonify({"tasks": tasks, "count": len(tasks)})
 
 
+# ==================== 求助请求 API（第 3 周任务） ====================
+
+@app.route("/api/help", methods=["POST"])
+def create_help_request():
+    """创建求助请求（ESP32 按键触发）"""
+    data = request.get_json() or {}
+
+    request_id = data.get("request_id")
+    if not request_id:
+        request_id = str(uuid.uuid4())[:8]
+
+    device_id = data.get("device_id", "esp32-s3-eye")
+    message = data.get("message", "教学求助：需要帮助")
+    now = time.time()
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO help_requests (request_id, device_id, message, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+        (request_id, device_id, message, now)
+    )
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "request_id": request_id,
+        "status": "pending",
+        "created_at": now
+    }), 201
+
+
+@app.route("/api/help/<request_id>", methods=["GET"])
+def get_help_status(request_id):
+    """查询求助请求状态（ESP32 轮询回应）"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        SELECT request_id, device_id, message, status,
+               created_at, responded_at, response_msg
+        FROM help_requests
+        WHERE request_id=?
+    """, (request_id,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+        return jsonify({"error": "求助请求不存在"}), 404
+
+    result = {
+        "request_id": row[0],
+        "device_id": row[1],
+        "message": row[2],
+        "status": row[3],
+        "created_at": row[4],
+    }
+    if row[5]:
+        result["responded_at"] = row[5]
+    if row[6]:
+        result["response_msg"] = row[6]
+
+    return jsonify(result)
+
+
+@app.route("/api/help/<request_id>/respond", methods=["POST"])
+def respond_help_request(request_id):
+    """回应求助请求（Web 前端操作）"""
+    data = request.get_json() or {}
+    response_msg = data.get("message", "已收到求助，正在处理")
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE help_requests SET status='responded', responded_at=?, response_msg=? WHERE request_id=? AND status='pending'",
+        (time.time(), response_msg, request_id)
+    )
+    conn.commit()
+    conn.close()
+
+    if c.rowcount == 0:
+        return jsonify({"error": "求助请求状态不正确或不存在"}), 404
+
+    return jsonify({"status": "responded"})
+
+
+@app.route("/api/help/<request_id>/cancel", methods=["POST"])
+def cancel_help_request(request_id):
+    """取消求助请求（Web 前端操作）"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE help_requests SET status='cancelled', responded_at=? WHERE request_id=? AND status='pending'",
+        (time.time(), request_id)
+    )
+    conn.commit()
+    conn.close()
+
+    if c.rowcount == 0:
+        return jsonify({"error": "求助请求状态不正确或不存在"}), 404
+
+    return jsonify({"status": "cancelled"})
+
+
+@app.route("/api/help", methods=["GET"])
+def get_all_help_requests():
+    """获取所有求助请求列表"""
+    limit = request.args.get("limit", 20, type=int)
+    limit = min(limit, 100)
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        SELECT request_id, device_id, message, status,
+               created_at, responded_at, response_msg
+        FROM help_requests
+        ORDER BY created_at DESC
+        LIMIT ?
+    """, (limit,))
+    rows = c.fetchall()
+    conn.close()
+
+    help_list = []
+    for row in rows:
+        help_list.append({
+            "request_id": row[0],
+            "device_id": row[1],
+            "message": row[2],
+            "status": row[3],
+            "created_at": row[4],
+            "responded_at": row[5],
+            "response_msg": row[6]
+        })
+
+    return jsonify({"help_requests": help_list, "count": len(help_list)})
+
+
 if __name__ == "__main__":
     print("=" * 50)
     print("IMU 数据接收服务器")
@@ -388,8 +540,8 @@ if __name__ == "__main__":
 
     # 启动服务器
     print("\n启动服务器...")
-    print("访问地址: http://localhost:5000")
-    print("API 文档: http://localhost:5000/api/imu (POST)")
+    print("访问地址：http://localhost:5000")
+    print("API 文档：http://localhost:5000/api/imu (POST)")
     print("\n按 Ctrl+C 停止服务器\n")
 
     app.run(host="0.0.0.0", port=5000, debug=False)
