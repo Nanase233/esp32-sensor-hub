@@ -12,6 +12,8 @@
 #include "qma7981.h"
 #include "driver/i2c.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include <math.h>
 
 static const char *TAG = "QMA7981";
@@ -19,11 +21,13 @@ static const char *TAG = "QMA7981";
 /* I2C 外设编号 */
 #define I2C_PORT_NUM  I2C_NUM_0
 
+/* I2C 互斥锁（多任务访问保护） */
+static SemaphoreHandle_t s_i2c_mutex = NULL;
+
 /* 当前量程对应的灵敏度（m/s² per LSB）
  * QMA7981 输出为 14 位有符号数，左对齐在 16 位中（低 2 位为 0）
- * 右移 2 后得到 14 位原始值，范围 [-8192, 8191]
- * ±2g:  8192 LSB = 2g → 灵敏度 = 9.80665 / 4096 ≈ 0.002394 m/s²/LSB
- * ±4g:  灵敏度翻倍，以此类推
+ * 右移 2 后得到 14 位有符号数
+ * 实测 3072 LSB/g（±2g），灵敏度 = 9.80665 / 3072 ≈ 0.003190 m/s²/LSB
  */
 static float s_sensitivity = 0.0f;
 
@@ -34,6 +38,8 @@ static float s_sensitivity = 0.0f;
  */
 static esp_err_t qma7981_write_reg(uint8_t reg, uint8_t value)
 {
+    xSemaphoreTake(s_i2c_mutex, pdMS_TO_TICKS(1000));
+
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (QMA7981_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
@@ -43,6 +49,8 @@ static esp_err_t qma7981_write_reg(uint8_t reg, uint8_t value)
 
     esp_err_t ret = i2c_master_cmd_begin(I2C_PORT_NUM, cmd, pdMS_TO_TICKS(100));
     i2c_cmd_link_delete(cmd);
+
+    xSemaphoreGive(s_i2c_mutex);
     return ret;
 }
 
@@ -51,6 +59,8 @@ static esp_err_t qma7981_write_reg(uint8_t reg, uint8_t value)
  */
 static esp_err_t qma7981_read_reg(uint8_t reg, uint8_t *value)
 {
+    xSemaphoreTake(s_i2c_mutex, pdMS_TO_TICKS(1000));
+
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
 
     /* 写阶段：发送寄存器地址 */
@@ -66,6 +76,8 @@ static esp_err_t qma7981_read_reg(uint8_t reg, uint8_t *value)
 
     esp_err_t ret = i2c_master_cmd_begin(I2C_PORT_NUM, cmd, pdMS_TO_TICKS(100));
     i2c_cmd_link_delete(cmd);
+
+    xSemaphoreGive(s_i2c_mutex);
     return ret;
 }
 
@@ -74,6 +86,8 @@ static esp_err_t qma7981_read_reg(uint8_t reg, uint8_t *value)
  */
 static esp_err_t qma7981_read_regs(uint8_t start_reg, uint8_t *buf, uint8_t len)
 {
+    xSemaphoreTake(s_i2c_mutex, pdMS_TO_TICKS(1000));
+
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
 
     /* 写阶段：发送起始寄存器地址 */
@@ -92,6 +106,8 @@ static esp_err_t qma7981_read_regs(uint8_t start_reg, uint8_t *buf, uint8_t len)
 
     esp_err_t ret = i2c_master_cmd_begin(I2C_PORT_NUM, cmd, pdMS_TO_TICKS(100));
     i2c_cmd_link_delete(cmd);
+
+    xSemaphoreGive(s_i2c_mutex);
     return ret;
 }
 
@@ -100,6 +116,15 @@ static esp_err_t qma7981_read_regs(uint8_t start_reg, uint8_t *buf, uint8_t len)
 esp_err_t qma7981_init(qma7981_range_t range)
 {
     esp_err_t ret;
+
+    /* 创建 I2C 互斥锁 */
+    if (s_i2c_mutex == NULL) {
+        s_i2c_mutex = xSemaphoreCreateMutex();
+        if (s_i2c_mutex == NULL) {
+            ESP_LOGE(TAG, "创建 I2C 互斥锁失败");
+            return ESP_FAIL;
+        }
+    }
 
     /* 1. 初始化 I2C 外设 */
     i2c_config_t i2c_cfg = {
@@ -135,8 +160,8 @@ esp_err_t qma7981_init(qma7981_range_t range)
         return ret;
     }
 
-    if (chip_id != QMA7981_CHIP_ID_VALUE) {
-        ESP_LOGE(TAG, "芯片 ID 不匹配！期望 0x%02X，实际 0x%02X",
+    if (chip_id != QMA7981_CHIP_ID_VALUE && chip_id != 0x90) {
+        ESP_LOGE(TAG, "芯片 ID 不匹配！期望 0x%02X 或 0x90，实际 0x%02X",
                  QMA7981_CHIP_ID_VALUE, chip_id);
         ESP_LOGE(TAG, "排错：确认传感器型号，或降低 I2C 频率至 100kHz 重试");
         return ESP_ERR_INVALID_RESPONSE;
@@ -150,13 +175,13 @@ esp_err_t qma7981_init(qma7981_range_t range)
         return ret;
     }
 
-    /* 根据量程计算灵敏度 */
+    /* 根据量程计算灵敏度（实测 3072 LSB/g） */
     switch (range) {
-        case QMA7981_RANGE_2G:  s_sensitivity = 0.002394f; break;
-        case QMA7981_RANGE_4G:  s_sensitivity = 0.004788f; break;
-        case QMA7981_RANGE_8G:  s_sensitivity = 0.009575f; break;
-        case QMA7981_RANGE_16G: s_sensitivity = 0.019150f; break;
-        default:                s_sensitivity = 0.002394f; break;
+        case QMA7981_RANGE_2G:  s_sensitivity = 0.003190f; break;
+        case QMA7981_RANGE_4G:  s_sensitivity = 0.006381f; break;
+        case QMA7981_RANGE_8G:  s_sensitivity = 0.012761f; break;
+        case QMA7981_RANGE_16G: s_sensitivity = 0.025522f; break;
+        default:                s_sensitivity = 0.003190f; break;
     }
     ESP_LOGI(TAG, "量程设置为 ±%dg，灵敏度 = %.6f m/s²/LSB",
              (1 << (int)range) * 2, s_sensitivity);
@@ -168,14 +193,26 @@ esp_err_t qma7981_init(qma7981_range_t range)
         return ret;
     }
 
-    /* 5. 进入测量模式（电源控制寄存器置为 active） */
-    ret = qma7981_write_reg(QMA7981_REG_POWER_CTL, 0x01);
+    /* 5. 进入测量模式（电源控制寄存器写入 0xC0） */
+    ret = qma7981_write_reg(QMA7981_REG_POWER_CTL, QMA7981_CMD_ACTIVE);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "进入测量模式失败: %s", esp_err_to_name(ret));
         return ret;
     }
 
+    /* 等待传感器启动（典型唤醒时间 1ms，留余量 20ms） */
+    vTaskDelay(pdMS_TO_TICKS(20));
+
     ESP_LOGI(TAG, "QMA7981 初始化完成，进入测量模式");
+
+    /* 诊断：读取关键寄存器 */
+    uint8_t range_val = 0, bw_val = 0, pwr_val = 0;
+    qma7981_read_reg(QMA7981_REG_RANGE, &range_val);
+    qma7981_read_reg(QMA7981_REG_BW, &bw_val);
+    qma7981_read_reg(QMA7981_REG_POWER_CTL, &pwr_val);
+    ESP_LOGI(TAG, "寄存器诊断: RANGE=0x%02X, BW=0x%02X, POWER_CTL=0x%02X",
+             range_val, bw_val, pwr_val);
+
     return ESP_OK;
 }
 
@@ -185,18 +222,38 @@ esp_err_t qma7981_read_accel(qma7981_data_t *data)
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* 连续读取 6 个字节（X/Y/Z 各 2 字节） */
-    uint8_t buf[6] = {0};
-    esp_err_t ret = qma7981_read_regs(QMA7981_REG_ACC_X_LSB, buf, 6);
+    /* 分别读取 X/Y/Z 轴数据（各 2 字节，寄存器地址 0x01/0x03/0x05） */
+    uint8_t x_buf[2] = {0}, y_buf[2] = {0}, z_buf[2] = {0};
+    esp_err_t ret;
+
+    ret = qma7981_read_regs(QMA7981_REG_ACC_X, x_buf, 2);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "读取加速度数据失败: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "读取 X 轴数据失败: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    ret = qma7981_read_regs(QMA7981_REG_ACC_Y, y_buf, 2);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "读取 Y 轴数据失败: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    ret = qma7981_read_regs(QMA7981_REG_ACC_Z, z_buf, 2);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "读取 Z 轴数据失败: %s", esp_err_to_name(ret));
         return ret;
     }
 
+    /* 调试：打印原始字节（前 10 次） */
+    static int debug_count = 0;
+    if (debug_count < 10) {
+        ESP_LOGI(TAG, "原始数据: X[%02X %02X] Y[%02X %02X] Z[%02X %02X]",
+                 x_buf[0], x_buf[1], y_buf[0], y_buf[1], z_buf[0], z_buf[1]);
+        debug_count++;
+    }
+
     /* 拼接 16 位原始值，右移 2 得到 14 位有符号数 */
-    int16_t raw_x = (int16_t)((buf[1] << 8) | buf[0]) >> 2;
-    int16_t raw_y = (int16_t)((buf[3] << 8) | buf[2]) >> 2;
-    int16_t raw_z = (int16_t)((buf[5] << 8) | buf[4]) >> 2;
+    int16_t raw_x = (int16_t)((x_buf[1] << 8) | x_buf[0]) >> 2;
+    int16_t raw_y = (int16_t)((y_buf[1] << 8) | y_buf[0]) >> 2;
+    int16_t raw_z = (int16_t)((z_buf[1] << 8) | z_buf[0]) >> 2;
 
     /* 转换为 m/s² */
     data->x = raw_x * s_sensitivity;

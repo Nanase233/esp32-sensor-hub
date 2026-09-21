@@ -183,11 +183,21 @@
                 <button onclick="toggleAutoRefresh()">
                     <span id="refreshBtn">开启自动刷新</span>
                 </button>
+                <button onclick="collectOnce()">采集一次最新数据</button>
+                <button onclick="refreshHistory()">刷新已存数据</button>
                 <button onclick="clearChart()">清空图表</button>
             </div>
             <p style="color: #666; font-size: 0.9em;">
-                提示：确保 ESP32 已连接并上传数据，或手动测试 API
+                提示：「采集一次最新数据」会触发设备重新采集并回传；「刷新已存数据」仅读取数据库旧值
             </p>
+        </div>
+
+        <!-- 采集任务列表 -->
+        <div class="card">
+            <h2>📋 采集任务</h2>
+            <div id="task-list">
+                <p style="color: #999;">暂无任务</p>
+            </div>
         </div>
 
         <!-- 实时数据 -->
@@ -415,9 +425,135 @@
         // 初始加载
         updateData();
         updateStats();
+        updateTaskList();
 
-        // 每 5 秒更新统计
+        // 每 5 秒更新统计和任务列表
         setInterval(updateStats, 5000);
+        setInterval(updateTaskList, 2000);
+
+        // ==================== 远程采集功能 ====================
+
+        // 采集一次最新数据
+        async function collectOnce() {
+            try {
+                const resp = await fetch('/api/collect', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({sensor: 'imu'})
+                });
+                if (resp.ok) {
+                    const result = await resp.json();
+                    const rid = result.request_id;
+                    console.log('创建采集任务:', rid);
+
+                    // 轮询任务状态直到完成或超时
+                    pollTaskStatus(rid);
+                } else {
+                    alert('创建任务失败');
+                }
+            } catch (e) {
+                console.error('采集请求失败:', e);
+                alert('网络错误');
+            }
+        }
+
+        // 轮询任务状态
+        function pollTaskStatus(requestId) {
+            let attempts = 0;
+            const maxAttempts = 20; // 最多轮询 20 次（约 20 秒）
+
+            const timer = setInterval(async () => {
+                attempts++;
+                try {
+                    const resp = await fetch(`/api/collect/${requestId}`);
+                    if (resp.ok) {
+                        const task = await resp.json();
+                        updateTaskList();
+
+                        if (['completed', 'failed', 'timeout'].includes(task.status)) {
+                            clearInterval(timer);
+                            if (task.status === 'completed' && task.data) {
+                                // 更新图表显示新数据
+                                const timeLabel = new Date().toLocaleTimeString();
+                                chart.data.labels.push(timeLabel + ' (采集)');
+                                chart.data.datasets[0].data.push(task.data.ax);
+                                chart.data.datasets[1].data.push(task.data.ay);
+                                chart.data.datasets[2].data.push(task.data.az);
+                                if (chart.data.labels.length > 50) {
+                                    chart.data.labels.shift();
+                                    chart.data.datasets.forEach(ds => ds.data.shift());
+                                }
+                                chart.update();
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error('轮询失败:', e);
+                }
+
+                if (attempts >= maxAttempts) {
+                    clearInterval(timer);
+                }
+            }, 1000);
+        }
+
+        // 刷新已存数据（仅读取数据库）
+        async function refreshHistory() {
+            await updateData();
+            updateTaskList();
+        }
+
+        // 更新任务列表
+        async function updateTaskList() {
+            try {
+                const resp = await fetch('/api/tasks?limit=10');
+                if (resp.ok) {
+                    const result = await resp.json();
+                    const container = document.getElementById('task-list');
+
+                    if (result.tasks.length === 0) {
+                        container.innerHTML = '<p style="color: #999;">暂无任务</p>';
+                        return;
+                    }
+
+                    const statusIcon = {
+                        'pending': '⏳',
+                        'sent': '📡',
+                        'received': '📥',
+                        'completed': '✅',
+                        'failed': '',
+                        'timeout': '⏰'
+                    };
+
+                    let html = '<table style="width:100%; border-collapse: collapse; font-size: 0.9em;">';
+                    html += '<tr style="border-bottom: 2px solid #eee;">';
+                    html += '<th style="padding:8px; text-align:left;">Request ID</th>';
+                    html += '<th style="padding:8px; text-align:left;">状态</th>';
+                    html += '<th style="padding:8px; text-align:left;">传感器</th>';
+                    html += '<th style="padding:8px; text-align:left;">创建时间</th>';
+                    html += '<th style="padding:8px; text-align:left;">数据</th>';
+                    html += '</tr>';
+
+                    result.tasks.forEach(t => {
+                        const icon = statusIcon[t.status] || '?';
+                        const time = t.created_at ? new Date(t.created_at * 1000).toLocaleTimeString() : '--';
+                        const dataStr = t.status === 'completed' ? '✅ 已回传' : (t.error_msg || '--');
+                        html += `<tr style="border-bottom: 1px solid #eee;">`;
+                        html += `<td style="padding:8px; font-family: monospace;">${t.request_id}</td>`;
+                        html += `<td style="padding:8px;">${icon} ${t.status}</td>`;
+                        html += `<td style="padding:8px;">${t.sensor}</td>`;
+                        html += `<td style="padding:8px;">${time}</td>`;
+                        html += `<td style="padding:8px;">${dataStr}</td>`;
+                        html += `</tr>`;
+                    });
+
+                    html += '</table>';
+                    container.innerHTML = html;
+                }
+            } catch (e) {
+                console.error('获取任务列表失败:', e);
+            }
+        }
     </script>
 </body>
 </html>

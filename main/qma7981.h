@@ -21,18 +21,18 @@
 
 /* ---- 寄存器地址 ---- */
 #define QMA7981_REG_CHIP_ID     0x00    /* 芯片 ID（只读） */
-#define QMA7981_REG_ACC_X_LSB   0x05    /* X 轴加速度低字节 */
-#define QMA7981_REG_ACC_X_MSB   0x06    /* X 轴加速度高字节 */
-#define QMA7981_REG_ACC_Y_LSB   0x07    /* Y 轴加速度低字节 */
-#define QMA7981_REG_ACC_Y_MSB   0x08    /* Y 轴加速度高字节 */
-#define QMA7981_REG_ACC_Z_LSB   0x09    /* Z 轴加速度低字节 */
-#define QMA7981_REG_ACC_Z_MSB   0x0A    /* Z 轴加速度高字节 */
+#define QMA7981_REG_ACC_X       0x01    /* X 轴加速度（2 字节） */
+#define QMA7981_REG_ACC_Y       0x03    /* Y 轴加速度（2 字节） */
+#define QMA7981_REG_ACC_Z       0x05    /* Z 轴加速度（2 字节） */
 #define QMA7981_REG_RANGE       0x0F    /* 量程选择 */
 #define QMA7981_REG_BW          0x10    /* 带宽/采样率 */
-#define QMA7981_REG_POWER_CTL   0x20    /* 电源控制 */
+#define QMA7981_REG_POWER_CTL   0x11    /* 电源控制 */
 
-/* ---- 芯片 ID 期望值 ---- */
-#define QMA7981_CHIP_ID_VALUE   0x90
+/* ---- 电源控制命令 ---- */
+#define QMA7981_CMD_ACTIVE      0xC0    /* 进入测量模式 */
+
+/* ---- 芯片 ID 期望值（0xE7 或 0x90 均可能） ---- */
+#define QMA7981_CHIP_ID_VALUE   0xE7
 
 /* ---- 量程枚举 ---- */
 typedef enum {

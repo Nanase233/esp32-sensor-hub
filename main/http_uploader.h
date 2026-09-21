@@ -15,12 +15,24 @@
 #define HTTP_TIMEOUT_MS     5000   /* HTTP 请求超时时间 */
 
 /**
- * 上传 IMU 数据到服务器
+ * 上传 IMU 数据到服务器（周期上报，无 request_id）
  *
  * @param data IMU 三轴加速度数据
- * @param timestamp 时间戳（毫秒）
+ * @param timestamp 时间戳（微秒）
  * @return ESP_OK 上传成功，其他表示失败
  */
 esp_err_t http_uploader_send_imu(const qma7981_data_t *data, uint64_t timestamp);
+
+/**
+ * 上传 IMU 数据到服务器（携带 request_id，用于远程采集任务）
+ *
+ * @param data IMU 三轴加速度数据
+ * @param timestamp 时间戳（微秒）
+ * @param request_id 采集任务 ID（关联服务器任务）
+ * @return ESP_OK 上传成功，其他表示失败
+ */
+esp_err_t http_uploader_send_imu_with_request(const qma7981_data_t *data,
+                                               uint64_t timestamp,
+                                               const char *request_id);
 
 #endif /* HTTP_UPLOADER_H */

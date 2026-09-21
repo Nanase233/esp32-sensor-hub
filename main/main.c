@@ -18,6 +18,7 @@
 #include "qma7981.h"
 #include "wifi_manager.h"
 #include "http_uploader.h"
+#include "command_handler.h"
 
 static const char *TAG = "MAIN";
 
@@ -52,7 +53,11 @@ void app_main(void)
         /* WiFi 失败不退出，继续本地采集 */
     }
 
-    /* 3. 主循环：采集 + 上传 */
+    /* 3. 启动远程采集命令处理器 */
+    ESP_LOGI(TAG, "启动命令处理器...");
+    command_handler_init();
+
+    /* 4. 主循环：采集 + 上传 */
     qma7981_data_t accel;
     uint32_t sample_count = 0;
     uint32_t upload_count = 0;
