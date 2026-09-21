@@ -219,6 +219,128 @@
         .badge-pending { background: #ffa726; }
         .badge-responded { background: #66bb6a; }
         .badge-cancelled { background: #ef5350; }
+
+        /* 自然语言助手样式（第 4 周任务） */
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 400px;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            min-height: 200px;
+        }
+
+        .chat-message {
+            margin-bottom: 15px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chat-message.user {
+            align-items: flex-end;
+        }
+
+        .chat-message.assistant {
+            align-items: flex-start;
+        }
+
+        .chat-bubble {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 15px;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+        }
+
+        .chat-message.user .chat-bubble {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-bottom-right-radius: 5px;
+        }
+
+        .chat-message.assistant .chat-bubble {
+            background: white;
+            color: #333;
+            border: 1px solid #e0e0e0;
+            border-bottom-left-radius: 5px;
+        }
+
+        .chat-meta {
+            font-size: 0.75em;
+            color: #999;
+            margin-top: 5px;
+            padding: 0 5px;
+        }
+
+        .chat-input-area {
+            display: flex;
+            gap: 10px;
+        }
+
+        .chat-input-area input {
+            flex: 1;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            font-size: 1em;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .chat-input-area input:focus {
+            border-color: #667eea;
+        }
+
+        .chat-input-area button {
+            padding: 12px 25px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: transform 0.2s;
+        }
+
+        .chat-input-area button:hover {
+            transform: scale(1.05);
+        }
+
+        .chat-input-area button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .chat-examples {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .chat-example-btn {
+            padding: 6px 12px;
+            background: #f0f0f0;
+            border: 1px solid #ddd;
+            border-radius: 15px;
+            cursor: pointer;
+            font-size: 0.85em;
+            transition: all 0.2s;
+        }
+
+        .chat-example-btn:hover {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
     </style>
 </head>
 <body>
@@ -307,6 +429,35 @@
             <h2>📉 历史数据趋势</h2>
             <div class="chart-container">
                 <canvas id="imuChart"></canvas>
+            </div>
+        </div>
+
+        <!-- 自然语言助手（第 4 周任务） -->
+        <div class="card">
+            <h2>🤖 自然语言助手</h2>
+            <p style="color: #666; font-size: 0.9em; margin-bottom: 15px;">
+                用自然语言查询数据或请求采集。例如："查看上次数据"、"重新采集一次"
+            </p>
+            <div class="chat-container">
+                <div class="chat-messages" id="chat-messages">
+                    <div class="chat-message assistant">
+                        <div class="chat-bubble">你好！我是 IMU 数据助手。你可以问我：
+• 查看上次数据
+• 重新采集一次
+• 显示最新读数</div>
+                        <div class="chat-meta">助手</div>
+                    </div>
+                </div>
+                <div class="chat-input-area">
+                    <input type="text" id="chat-input" placeholder="输入指令..." onkeypress="if(event.key==='Enter')sendChat()">
+                    <button id="chat-send-btn" onclick="sendChat()">发送</button>
+                </div>
+                <div class="chat-examples">
+                    <button class="chat-example-btn" onclick="useExample('查看上次数据')">查看上次数据</button>
+                    <button class="chat-example-btn" onclick="useExample('重新采集一次')">重新采集一次</button>
+                    <button class="chat-example-btn" onclick="useExample('显示最新读数')">显示最新读数</button>
+                    <button class="chat-example-btn" onclick="useExample('获取新数据')">获取新数据</button>
+                </div>
             </div>
         </div>
 
@@ -713,6 +864,92 @@
             } catch (e) {
                 console.error('取消失败:', e);
                 alert('网络错误');
+            }
+        }
+
+        // ==================== 自然语言助手（第 4 周任务） ====================
+
+        /**
+         * 添加聊天消息到界面
+         * @param {string} text - 消息内容
+         * @param {string} sender - 'user' 或 'assistant'
+         * @param {string} meta - 元信息（可选）
+         */
+        function addChatMessage(text, sender, meta = '') {
+            const container = document.getElementById('chat-messages');
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `chat-message ${sender}`;
+
+            const bubble = document.createElement('div');
+            bubble.className = 'chat-bubble';
+            bubble.textContent = text;
+
+            msgDiv.appendChild(bubble);
+
+            if (meta) {
+                const metaDiv = document.createElement('div');
+                metaDiv.className = 'chat-meta';
+                metaDiv.textContent = meta;
+                msgDiv.appendChild(metaDiv);
+            }
+
+            container.appendChild(msgDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        /**
+         * 使用示例指令
+         * @param {string} text - 示例文本
+         */
+        function useExample(text) {
+            document.getElementById('chat-input').value = text;
+            sendChat();
+        }
+
+        /**
+         * 发送聊天消息
+         */
+        async function sendChat() {
+            const input = document.getElementById('chat-input');
+            const btn = document.getElementById('chat-send-btn');
+            const text = input.value.trim();
+
+            if (!text) return;
+
+            // 禁用输入
+            input.disabled = true;
+            btn.disabled = true;
+
+            // 显示用户消息
+            addChatMessage(text, 'user');
+            input.value = '';
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({message: text})
+                });
+
+                const result = await response.json();
+
+                // 显示助手回复
+                const intentText = {
+                    'query': '查询',
+                    'collect': '采集',
+                    'unknown': '未知'
+                };
+                const meta = `意图：${intentText[result.intent] || result.intent} | 来源：${result.source || '未知'}`;
+                addChatMessage(result.reply, 'assistant', meta);
+
+            } catch (e) {
+                console.error('聊天请求失败:', e);
+                addChatMessage('网络错误，请稍后重试。', 'assistant', '错误');
+            } finally {
+                // 恢复输入
+                input.disabled = false;
+                btn.disabled = false;
+                input.focus();
             }
         }
     </script>

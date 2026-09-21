@@ -21,6 +21,9 @@ import os
 import uuid
 import time
 
+# 导入自然语言助手（第 4 周任务）
+from nl_assistant import process_nl_input, process_with_llm
+
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
 
@@ -537,6 +540,52 @@ def get_all_help_requests():
         })
 
     return jsonify({"help_requests": help_list, "count": len(help_list)})
+
+
+# ==================== 自然语言助手 API（第 4 周任务） ====================
+
+@app.route("/api/chat", methods=["POST"])
+def chat():
+    """
+    自然语言助手入口
+    
+    接收用户自然语言输入，解析意图后调用对应工具。
+    支持查询（查看上次数据）和采集（重新采集一次）两种意图。
+    
+    请求格式：
+      {"message": "查看上次数据"}
+    
+    返回格式：
+      {
+        "success": true/false,
+        "reply": "回复文本",
+        "intent": "query/collect/unknown",
+        "source": "database/device/validation/timeout",
+        "data": {...}
+      }
+    """
+    data = request.get_json() or {}
+    message = data.get("message", "").strip()
+    
+    if not message:
+        return jsonify({
+            "success": False,
+            "reply": "请输入您的指令。例如：'查看上次数据' 或 '重新采集一次'",
+            "intent": "unknown",
+            "source": "validation"
+        }), 400
+    
+    # 处理自然语言输入（当前使用规则解析，预留 LLM 接口）
+    result = process_nl_input(message)
+    
+    return jsonify(result)
+
+
+@app.route("/api/chat/tools", methods=["GET"])
+def get_available_tools():
+    """获取可用的工具列表（LLM Function Calling 格式）"""
+    from nl_assistant import LLM_TOOLS_SCHEMA
+    return jsonify({"tools": LLM_TOOLS_SCHEMA})
 
 
 if __name__ == "__main__":
