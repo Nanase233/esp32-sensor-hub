@@ -624,7 +624,8 @@
                     const result = await resp.json();
                     const container = document.getElementById('help-list');
 
-                    if (result.requests.length === 0) {
+                    const requests = result.help_requests || result.requests || [];
+                    if (requests.length === 0) {
                         container.innerHTML = '<p style="color: #999;">暂无求助请求</p>';
                         return;
                     }
@@ -642,7 +643,7 @@
                     };
 
                     let html = '';
-                    result.requests.forEach(req => {
+                    requests.forEach(req => {
                         const time = req.created_at ? new Date(req.created_at * 1000).toLocaleString() : '--';
                         const badge = `<span class="help-status-badge ${badgeClass[req.status] || ''}">${statusText[req.status] || req.status}</span>`;
 
@@ -680,7 +681,7 @@
                 const resp = await fetch(`/api/help/${requestId}/respond`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({response_msg: msg})
+                    body: JSON.stringify({message: msg})
                 });
                 if (resp.ok) {
                     alert('已回应求助请求');

@@ -24,6 +24,15 @@ import time
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
 
+
+@app.after_request
+def add_no_cache_headers(response):
+    """防止浏览器缓存"""
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
 # 数据库文件
 DB_FILE = "imu_data.db"
 
