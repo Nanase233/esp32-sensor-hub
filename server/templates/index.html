@@ -220,126 +220,97 @@
         .badge-responded { background: #66bb6a; }
         .badge-cancelled { background: #ef5350; }
 
-        /* 自然语言助手样式（第 4 周任务） */
-        .chat-container {
+        /* 自然语言助手样式 */
+        .nl-chat-container {
             display: flex;
             flex-direction: column;
-            height: 400px;
+            gap: 10px;
         }
 
-        .chat-messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 15px;
+        .nl-chat-box {
             background: #f8f9fa;
-            border-radius: 10px;
-            margin-bottom: 15px;
-            min-height: 200px;
-        }
-
-        .chat-message {
-            margin-bottom: 15px;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .chat-message.user {
-            align-items: flex-end;
-        }
-
-        .chat-message.assistant {
-            align-items: flex-start;
-        }
-
-        .chat-bubble {
-            max-width: 80%;
-            padding: 12px 16px;
-            border-radius: 15px;
-            word-wrap: break-word;
-            white-space: pre-wrap;
-        }
-
-        .chat-message.user .chat-bubble {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border-bottom-right-radius: 5px;
-        }
-
-        .chat-message.assistant .chat-bubble {
-            background: white;
-            color: #333;
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 300px;
+            overflow-y: auto;
             border: 1px solid #e0e0e0;
-            border-bottom-left-radius: 5px;
         }
 
-        .chat-meta {
-            font-size: 0.75em;
-            color: #999;
-            margin-top: 5px;
-            padding: 0 5px;
+        .nl-message {
+            margin-bottom: 10px;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 0.95em;
+            line-height: 1.5;
         }
 
-        .chat-input-area {
+        .nl-message.user {
+            background: #667eea;
+            color: white;
+            margin-left: 40px;
+            text-align: right;
+        }
+
+        .nl-message.assistant {
+            background: #e8f5e9;
+            color: #333;
+            margin-right: 40px;
+            border-left: 3px solid #66bb6a;
+        }
+
+        .nl-message.error {
+            background: #ffebee;
+            color: #c62828;
+            margin-right: 40px;
+            border-left: 3px solid #ef5350;
+        }
+
+        .nl-message .meta {
+            font-size: 0.8em;
+            opacity: 0.7;
+            margin-top: 4px;
+        }
+
+        .nl-input-row {
             display: flex;
             gap: 10px;
         }
 
-        .chat-input-area input {
+        .nl-input-row input {
             flex: 1;
-            padding: 12px 15px;
-            border: 2px solid #e0e0e0;
-            border-radius: 25px;
+            padding: 10px 14px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
             font-size: 1em;
             outline: none;
-            transition: border-color 0.3s;
         }
 
-        .chat-input-area input:focus {
+        .nl-input-row input:focus {
             border-color: #667eea;
         }
 
-        .chat-input-area button {
-            padding: 12px 25px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 25px;
-            cursor: pointer;
-            font-size: 1em;
-            transition: transform 0.2s;
+        .nl-input-row button {
+            padding: 10px 20px;
+            white-space: nowrap;
         }
 
-        .chat-input-area button:hover {
-            transform: scale(1.05);
-        }
-
-        .chat-input-area button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .chat-examples {
+        .nl-examples {
             display: flex;
             flex-wrap: wrap;
-            gap: 8px;
-            margin-top: 10px;
+            gap: 6px;
+            margin-top: 8px;
         }
 
-        .chat-example-btn {
-            padding: 6px 12px;
-            background: #f0f0f0;
-            border: 1px solid #ddd;
-            border-radius: 15px;
-            cursor: pointer;
-            font-size: 0.85em;
-            transition: all 0.2s;
+        .nl-examples button {
+            background: #f0f0f0 !important;
+            color: #333 !important;
+            padding: 4px 12px !important;
+            font-size: 0.85em !important;
+            border-radius: 15px !important;
         }
 
-        .chat-example-btn:hover {
-            background: #667eea;
-            color: white;
-            border-color: #667eea;
+        .nl-examples button:hover {
+            background: #e0e0e0 !important;
         }
     </style>
 </head>
@@ -376,6 +347,29 @@
             <h2>🆘 求助请求</h2>
             <div id="help-list">
                 <p style="color: #999;">暂无求助请求</p>
+            </div>
+        </div>
+
+        <!-- 自然语言助手面板（第 4 周任务） -->
+        <div class="card">
+            <h2> 自然语言助手</h2>
+            <div class="nl-chat-container">
+                <div class="nl-chat-box" id="nl-chat-box">
+                    <div class="nl-message assistant">
+                        你好！我可以帮助你查询传感器数据或请求重新采集。
+                        <div class="meta">来源：系统 | 状态：就绪</div>
+                    </div>
+                </div>
+                <div class="nl-input-row">
+                    <input type="text" id="nl-input" placeholder="输入你的请求，如：查看上次数据 / 重新采集一次" onkeydown="if(event.key==='Enter')sendNlQuery()">
+                    <button onclick="sendNlQuery()">发送</button>
+                </div>
+                <div class="nl-examples">
+                    <button onclick="quickNl('查看上次数据')">查看上次数据</button>
+                    <button onclick="quickNl('重新采集一次')">重新采集一次</button>
+                    <button onclick="quickNl('最近一次加速度是多少')">最近加速度</button>
+                    <button onclick="quickNl('今天天气如何')">越界测试</button>
+                </div>
             </div>
         </div>
 
@@ -429,35 +423,6 @@
             <h2>📉 历史数据趋势</h2>
             <div class="chart-container">
                 <canvas id="imuChart"></canvas>
-            </div>
-        </div>
-
-        <!-- 自然语言助手（第 4 周任务） -->
-        <div class="card">
-            <h2>🤖 自然语言助手</h2>
-            <p style="color: #666; font-size: 0.9em; margin-bottom: 15px;">
-                用自然语言查询数据或请求采集。例如："查看上次数据"、"重新采集一次"
-            </p>
-            <div class="chat-container">
-                <div class="chat-messages" id="chat-messages">
-                    <div class="chat-message assistant">
-                        <div class="chat-bubble">你好！我是 IMU 数据助手。你可以问我：
-• 查看上次数据
-• 重新采集一次
-• 显示最新读数</div>
-                        <div class="chat-meta">助手</div>
-                    </div>
-                </div>
-                <div class="chat-input-area">
-                    <input type="text" id="chat-input" placeholder="输入指令..." onkeypress="if(event.key==='Enter')sendChat()">
-                    <button id="chat-send-btn" onclick="sendChat()">发送</button>
-                </div>
-                <div class="chat-examples">
-                    <button class="chat-example-btn" onclick="useExample('查看上次数据')">查看上次数据</button>
-                    <button class="chat-example-btn" onclick="useExample('重新采集一次')">重新采集一次</button>
-                    <button class="chat-example-btn" onclick="useExample('显示最新读数')">显示最新读数</button>
-                    <button class="chat-example-btn" onclick="useExample('获取新数据')">获取新数据</button>
-                </div>
             </div>
         </div>
 
@@ -869,87 +834,93 @@
 
         // ==================== 自然语言助手（第 4 周任务） ====================
 
-        /**
-         * 添加聊天消息到界面
-         * @param {string} text - 消息内容
-         * @param {string} sender - 'user' 或 'assistant'
-         * @param {string} meta - 元信息（可选）
-         */
-        function addChatMessage(text, sender, meta = '') {
-            const container = document.getElementById('chat-messages');
-            const msgDiv = document.createElement('div');
-            msgDiv.className = `chat-message ${sender}`;
-
-            const bubble = document.createElement('div');
-            bubble.className = 'chat-bubble';
-            bubble.textContent = text;
-
-            msgDiv.appendChild(bubble);
-
-            if (meta) {
-                const metaDiv = document.createElement('div');
-                metaDiv.className = 'chat-meta';
-                metaDiv.textContent = meta;
-                msgDiv.appendChild(metaDiv);
-            }
-
-            container.appendChild(msgDiv);
-            container.scrollTop = container.scrollHeight;
+        // 快捷输入
+        function quickNl(text) {
+            document.getElementById('nl-input').value = text;
+            sendNlQuery();
         }
 
-        /**
-         * 使用示例指令
-         * @param {string} text - 示例文本
-         */
-        function useExample(text) {
-            document.getElementById('chat-input').value = text;
-            sendChat();
+        // 添加消息到聊天框
+        function addNlMessage(text, type, meta) {
+            const box = document.getElementById('nl-chat-box');
+            const div = document.createElement('div');
+            div.className = `nl-message ${type}`;
+            div.innerHTML = text + (meta ? `<div class="meta">${meta}</div>` : '');
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight;
         }
 
-        /**
-         * 发送聊天消息
-         */
-        async function sendChat() {
-            const input = document.getElementById('chat-input');
-            const btn = document.getElementById('chat-send-btn');
+        // 发送自然语言查询
+        async function sendNlQuery() {
+            const input = document.getElementById('nl-input');
             const text = input.value.trim();
-
             if (!text) return;
 
-            // 禁用输入
-            input.disabled = true;
-            btn.disabled = true;
-
-            // 显示用户消息
-            addChatMessage(text, 'user');
             input.value = '';
+            addNlMessage(text, 'user');
 
             try {
-                const response = await fetch('/api/chat', {
+                const resp = await fetch('/api/nl_query', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({message: text})
+                    body: JSON.stringify({text: text})
                 });
 
-                const result = await response.json();
+                if (resp.ok) {
+                    const result = await resp.json();
+                    let msg = result.message || '未知结果';
 
-                // 显示助手回复
-                const intentText = {
-                    'query': '查询',
-                    'collect': '采集',
-                    'unknown': '未知'
-                };
-                const meta = `意图：${intentText[result.intent] || result.intent} | 来源：${result.source || '未知'}`;
-                addChatMessage(result.reply, 'assistant', meta);
+                    // 如果有数据，附加数据显示
+                    if (result.data) {
+                        const d = result.data;
+                        msg += `<br>ax=${d.ax?.toFixed(4) ?? '--'}, ay=${d.ay?.toFixed(4) ?? '--'}, az=${d.az?.toFixed(4) ?? '--'}`;
+                        if (d.timestamp) {
+                            const t = new Date(d.timestamp * 1000).toLocaleString();
+                            msg += `<br>时间戳: ${t}`;
+                        }
+                        if (d.created_at) {
+                            msg += `<br>入库时间: ${d.created_at}`;
+                        }
+                    }
 
+                    const sourceText = {
+                        'database': '数据库',
+                        'device': '设备实时采集',
+                        'timeout': '超时',
+                        'intent_classifier': '意图识别'
+                    };
+                    const source = sourceText[result.source] || result.source || '未知';
+                    const intentText = {
+                        'query_last': '查询上次',
+                        'collect_new': '重新采集',
+                        'ambiguous': '意图模糊',
+                        'out_of_scope': '超出范围'
+                    };
+                    const intent = intentText[result.intent] || result.intent;
+
+                    addNlMessage(msg, result.success ? 'assistant' : 'error',
+                        `来源: ${source} | 意图: ${intent} | 识别方式: ${result.intent_source === 'llm' ? 'LLM' : '规则'}`);
+
+                    // 如果采集成功，刷新图表
+                    if (result.success && result.source === 'device' && result.data) {
+                        const timeLabel = new Date().toLocaleTimeString() + ' (NL采集)';
+                        chart.data.labels.push(timeLabel);
+                        chart.data.datasets[0].data.push(result.data.ax);
+                        chart.data.datasets[1].data.push(result.data.ay);
+                        chart.data.datasets[2].data.push(result.data.az);
+                        if (chart.data.labels.length > 50) {
+                            chart.data.labels.shift();
+                            chart.data.datasets.forEach(ds => ds.data.shift());
+                        }
+                        chart.update();
+                    }
+                } else {
+                    const err = await resp.json();
+                    addNlMessage(err.error || '请求失败', 'error');
+                }
             } catch (e) {
-                console.error('聊天请求失败:', e);
-                addChatMessage('网络错误，请稍后重试。', 'assistant', '错误');
-            } finally {
-                // 恢复输入
-                input.disabled = false;
-                btn.disabled = false;
-                input.focus();
+                console.error('NL 查询失败:', e);
+                addNlMessage('网络错误，请检查服务器连接。', 'error');
             }
         }
     </script>

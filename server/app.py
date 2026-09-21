@@ -20,21 +20,146 @@ import sqlite3
 import os
 import uuid
 import time
-
-# 导入自然语言助手（第 4 周任务）
-from nl_assistant import process_nl_input, process_with_llm
+import re
+import json
+import urllib.request
+import urllib.error
 
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
 
+# ==================== LLM 配置 ====================
+# 授权语言服务配置（密钥留服务端，不暴露到 ESP32）
+LLM_API_URL = os.environ.get("LLM_API_URL", "")
+LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
+LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-3.5-turbo")
 
-@app.after_request
-def add_no_cache_headers(response):
-    """防止浏览器缓存"""
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    return response
+# LLM 超时（秒）
+LLM_TIMEOUT_S = 10
+
+
+def call_llm(user_text: str) -> dict:
+    """
+    调用授权语言服务进行意图识别。
+    返回 JSON 结构：
+    {
+        "intent": "query_last" | "collect_new" | "ambiguous" | "out_of_scope",
+        "device_id": "esp32-s3-eye" | null,
+        "sensor": "imu" | null,
+        "reasoning": "判断依据"
+    }
+    服务不可用时返回 None，由调用方回退到规则匹配。
+    """
+    if not LLM_API_URL or not LLM_API_KEY:
+        return None
+
+    system_prompt = (
+        "你是一个传感器数据采集系统的意图识别助手。"
+        "用户的输入会被映射为以下四种意图之一：\n"
+        "1. query_last - 查看上次/最近/历史数据（如：'查看上次数据'、'最近一次采集结果'、'上次加速度是多少'）\n"
+        "2. collect_new - 请求重新采集一次新数据（如：'重新采集一次'、'再采一次'、'现在采集'）\n"
+        "3. ambiguous - 输入模糊，无法确定是查看还是采集（如：'看看数据'、'帮我查一下'）\n"
+        "4. out_of_scope - 与数据采集无关的请求（如：'今天天气如何'、'讲个笑话'）\n\n"
+        "请严格按以下 JSON 格式返回，不要添加任何其他内容：\n"
+        '{"intent": "...", "device_id": "esp32-s3-eye", "sensor": "imu", "reasoning": "..."}\n'
+        "device_id 和 sensor 仅在明确提及时填写，否则为 null。"
+    )
+
+    payload = json.dumps({
+        "model": LLM_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 200
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        LLM_API_URL,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {LLM_API_KEY}"
+        },
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_S) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+            content = body["choices"][0]["message"]["content"]
+            # 提取 JSON（兼容 markdown 代码块包裹）
+            match = re.search(r'\{.*?\}', content, re.DOTALL)
+            if match:
+                return json.loads(match.group())
+            return None
+    except Exception as e:
+        print(f"[LLM] 调用失败: {e}")
+        return None
+
+
+def classify_intent_by_rules(user_text: str) -> dict:
+    """
+    备用路径：基于关键词规则进行意图分类。
+    当 LLM 服务不可用时使用（服务异常时使用结构化样例定位解析问题）。
+    """
+    text = user_text.lower().strip()
+
+    # 采集意图关键词
+    collect_keywords = ["重新采集", "再采", "新采集", "采集一次", "现在采集", "立即采集",
+                        "重新采", "再采一次", "采一次", "采集新的", "新数据"]
+    # 查询意图关键词
+    query_keywords = ["上次", "最近", "历史", "上一次", "之前的", "刚才", "刚才的",
+                      "查看数据", "看看数据", "查一下", "上次数据", "最近一次",
+                      "加速度", "数据是多少", "结果"]
+
+    is_collect = any(kw in text for kw in collect_keywords)
+    is_query = any(kw in text for kw in query_keywords)
+
+    if is_collect and not is_query:
+        return {
+            "intent": "collect_new",
+            "device_id": "esp32-s3-eye",
+            "sensor": "imu",
+            "reasoning": "规则匹配：检测到采集关键词"
+        }
+    elif is_query and not is_collect:
+        return {
+            "intent": "query_last",
+            "device_id": "esp32-s3-eye",
+            "sensor": "imu",
+            "reasoning": "规则匹配：检测到查询关键词"
+        }
+    elif is_collect and is_query:
+        return {
+            "intent": "ambiguous",
+            "device_id": None,
+            "sensor": None,
+            "reasoning": "规则匹配：同时检测到采集和查询关键词，意图模糊"
+        }
+    else:
+        # 无匹配关键词 → out_of_scope
+        return {
+            "intent": "out_of_scope",
+            "device_id": None,
+            "sensor": None,
+            "reasoning": "规则匹配：未检测到相关关键词"
+        }
+
+
+def classify_intent(user_text: str) -> dict:
+    """
+    意图识别入口：优先调用 LLM，失败时回退到规则匹配。
+    """
+    result = call_llm(user_text)
+    if result and result.get("intent") in ("query_last", "collect_new", "ambiguous", "out_of_scope"):
+        result["source"] = "llm"
+        return result
+    # 回退到规则匹配
+    result = classify_intent_by_rules(user_text)
+    result["source"] = "rules"
+    return result
 
 # 数据库文件
 DB_FILE = "imu_data.db"
@@ -542,50 +667,188 @@ def get_all_help_requests():
     return jsonify({"help_requests": help_list, "count": len(help_list)})
 
 
-# ==================== 自然语言助手 API（第 4 周任务） ====================
+# ==================== 自然语言查询 API（第 4 周任务） ====================
 
-@app.route("/api/chat", methods=["POST"])
-def chat():
+# 合法设备列表（校验设备范围）
+VALID_DEVICES = {"esp32-s3-eye"}
+# 合法传感器列表
+VALID_SENSORS = {"imu"}
+
+
+def query_last_data(device_id: str, sensor: str) -> dict:
     """
-    自然语言助手入口
-    
-    接收用户自然语言输入，解析意图后调用对应工具。
-    支持查询（查看上次数据）和采集（重新采集一次）两种意图。
-    
-    请求格式：
-      {"message": "查看上次数据"}
-    
-    返回格式：
-      {
-        "success": true/false,
-        "reply": "回复文本",
-        "intent": "query/collect/unknown",
-        "source": "database/device/validation/timeout",
-        "data": {...}
-      }
+    工具：查询最新一条记录。
+    返回来源、时间与状态，无数据时说明不足。
+    """
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        SELECT timestamp, ax, ay, az, created_at, request_id
+        FROM imu_data
+        ORDER BY id DESC
+        LIMIT 1
+    """)
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+        return {
+            "success": False,
+            "message": "数据库中暂无数据，设备可能尚未完成任何采集。",
+            "source": "database",
+        }
+
+    return {
+        "success": True,
+        "message": "已查询到最近一条记录。",
+        "source": "database",
+        "data": {
+            "ax": row[1],
+            "ay": row[2],
+            "az": row[3],
+            "timestamp": row[0],
+            "created_at": row[4],
+            "request_id": row[5],
+        },
+        "note": "以上为数据库中已有记录的时间，非实时采集。",
+    }
+
+
+def collect_new_data(device_id: str, sensor: str) -> dict:
+    """
+    工具：请求设备重新采集一次。
+    创建采集任务，轮询等待 ESP32 完成并上传，基于真实结果回复。
+    无设备完成证据时不回复"已采集成功"。
+    """
+    # 校验设备
+    if device_id and device_id not in VALID_DEVICES:
+        return {
+            "success": False,
+            "message": f"设备 '{device_id}' 不在可用范围内。可用设备：{', '.join(VALID_DEVICES)}",
+        }
+    # 校验传感器
+    if sensor and sensor not in VALID_SENSORS:
+        return {
+            "success": False,
+            "message": f"传感器 '{sensor}' 不支持。可用传感器：{', '.join(VALID_SENSORS)}",
+        }
+
+    device_id = device_id or "esp32-s3-eye"
+    sensor = sensor or "imu"
+
+    # 创建采集任务（复用已有 /api/collect 逻辑）
+    request_id = str(uuid.uuid4())[:8]
+    now = time.time()
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO collection_tasks (request_id, device_id, sensor, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+        (request_id, device_id, sensor, now)
+    )
+    conn.commit()
+    conn.close()
+
+    # 轮询等待 ESP32 完成（最多 30 秒）
+    max_wait = TASK_TIMEOUT_S
+    start = time.time()
+    while time.time() - start < max_wait:
+        time.sleep(1)
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT t.status, d.ax, d.ay, d.az, d.timestamp as data_ts
+            FROM collection_tasks t
+            LEFT JOIN imu_data d ON t.data_id = d.id
+            WHERE t.request_id=?
+        """, (request_id,))
+        row = c.fetchone()
+        conn.close()
+
+        if not row:
+            continue
+
+        status = row[0]
+        if status == "completed" and row[1] is not None:
+            return {
+                "success": True,
+                "message": "设备已完成新采集并上传数据。",
+                "source": "device",
+                "data": {
+                    "ax": row[1],
+                    "ay": row[2],
+                    "az": row[3],
+                    "timestamp": row[4],
+                },
+                "request_id": request_id,
+            }
+        elif status in ("failed", "timeout"):
+            return {
+                "success": False,
+                "message": f"采集任务{status}，设备未能完成数据采集。",
+                "source": "device",
+                "request_id": request_id,
+            }
+
+    # 超时
+    return {
+        "success": False,
+        "message": "等待设备响应超时（30秒），设备可能离线或无响应。",
+        "source": "timeout",
+        "request_id": request_id,
+    }
+
+
+@app.route("/api/nl_query", methods=["POST"])
+def nl_query():
+    """
+    自然语言查询入口（第 4 周任务）。
+    接收用户自然语言输入，通过 LLM 意图识别后路由到对应工具。
+
+    请求体：{"text": "用户输入"}
+    返回：结构化结果（包含来源、时间、状态）
     """
     data = request.get_json() or {}
-    message = data.get("message", "").strip()
-    
-    if not message:
-        return jsonify({
+    user_text = data.get("text", "").strip()
+
+    if not user_text:
+        return jsonify({"error": "请输入查询内容"}), 400
+
+    # 1. 意图识别（LLM 优先，规则回退）
+    intent_result = classify_intent(user_text)
+    intent = intent_result.get("intent", "out_of_scope")
+
+    # 2. 根据意图路由到工具
+    if intent == "query_last":
+        tool_result = query_last_data(
+            intent_result.get("device_id"),
+            intent_result.get("sensor")
+        )
+    elif intent == "collect_new":
+        tool_result = collect_new_data(
+            intent_result.get("device_id"),
+            intent_result.get("sensor")
+        )
+    elif intent == "ambiguous":
+        tool_result = {
             "success": False,
-            "reply": "请输入您的指令。例如：'查看上次数据' 或 '重新采集一次'",
-            "intent": "unknown",
-            "source": "validation"
-        }), 400
-    
-    # 处理自然语言输入（当前使用规则解析，预留 LLM 接口）
-    result = process_nl_input(message)
-    
-    return jsonify(result)
+            "message": "您的请求不够明确。请说明是'查看上次数据'还是'重新采集一次'？",
+            "source": "intent_classifier",
+        }
+    else:  # out_of_scope
+        tool_result = {
+            "success": False,
+            "message": "抱歉，我只能处理传感器数据查询和采集相关的请求。",
+            "source": "intent_classifier",
+        }
 
-
-@app.route("/api/chat/tools", methods=["GET"])
-def get_available_tools():
-    """获取可用的工具列表（LLM Function Calling 格式）"""
-    from nl_assistant import LLM_TOOLS_SCHEMA
-    return jsonify({"tools": LLM_TOOLS_SCHEMA})
+    return jsonify({
+        "input": user_text,
+        "intent": intent,
+        "intent_source": intent_result.get("source", "unknown"),
+        "reasoning": intent_result.get("reasoning", ""),
+        **tool_result,
+    })
 
 
 if __name__ == "__main__":
