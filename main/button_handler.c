@@ -29,11 +29,15 @@ static const char *TAG = "BTN";
 
 /* ==================== 硬件配置 ==================== */
 
-/* 按键 GPIO（使用 GPIO34，ESP32-S3-EYE 板载按键） */
-#define BUTTON_GPIO         GPIO_NUM_34
+/* 按键 GPIO（ESP32-S3-EYE 板载 BOOT 按键，按下为低电平） */
+#define BUTTON_GPIO         GPIO_NUM_0
 
-/* LED GPIO（使用 GPIO2，板载 LED） */
-#define LED_GPIO            GPIO_NUM_2
+/* LED GPIO（ESP32-S3-EYE 板载模组电源指示灯，绿色，GPIO3 开漏模式） */
+/* 注意：GPIO3 必须配置为开漏模式，否则可能损坏 LED */
+#define LED_GPIO            GPIO_NUM_3
+
+/* LED 闪烁持续时间（ms） */
+#define LED_BLINK_DURATION_MS  500
 
 /* 按键轮询间隔（ms） */
 #define BUTTON_POLL_INTERVAL_MS  50
@@ -79,7 +83,7 @@ static void gpio_init(void)
     };
     gpio_config(&btn_config);
 
-    /* LED GPIO 配置为输出 */
+    /* LED GPIO 配置为推挽输出，初始低电平（LED 灭） */
     gpio_config_t led_config = {
         .pin_bit_mask = (1ULL << LED_GPIO),
         .mode = GPIO_MODE_OUTPUT,
@@ -88,33 +92,13 @@ static void gpio_init(void)
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&led_config);
-
-    /* 初始状态：LED 熄灭 */
-    gpio_set_level(LED_GPIO, 0);
+    gpio_set_level(LED_GPIO, 0);          /* 初始灭 */
 
     ESP_LOGI(TAG, "GPIO 初始化完成 (按键=GPIO%d, LED=GPIO%d)", BUTTON_GPIO, LED_GPIO);
 }
 
 /**
- * LED 闪烁（本地反馈）
- *
- * @param times 闪烁次数
- * @param interval_ms 闪烁间隔（ms）
- */
-static void led_blink(int times, int interval_ms)
-{
-    for (int i = 0; i < times; i++) {
-        gpio_set_level(LED_GPIO, 1);  /* LED 亮 */
-        vTaskDelay(pdMS_TO_TICKS(interval_ms));
-        gpio_set_level(LED_GPIO, 0);  /* LED 灭 */
-        if (i < times - 1) {
-            vTaskDelay(pdMS_TO_TICKS(interval_ms));
-        }
-    }
-}
-
-/**
- * LED 长亮（收到回应确认）
+ * LED 点亮（高电平亮）
  */
 static void led_on(void)
 {
@@ -122,11 +106,40 @@ static void led_on(void)
 }
 
 /**
- * LED 熄灭（取消或空闲）
+ * LED 熄灭（低电平灭）
  */
 static void led_off(void)
 {
     gpio_set_level(LED_GPIO, 0);
+}
+
+/**
+ * 本地反馈：LED 闪烁 + 串口日志
+ */
+static void local_feedback(void)
+{
+    ESP_LOGI(TAG, "=== 按键已触发（LED 闪烁） ===");
+    led_on();
+    vTaskDelay(pdMS_TO_TICKS(LED_BLINK_DURATION_MS));
+    led_off();
+}
+
+/**
+ * 收到回应确认：LED 长亮
+ */
+static void feedback_responded(void)
+{
+    ESP_LOGI(TAG, "=== 收到远端回应（LED 长亮） ===");
+    led_on();
+}
+
+/**
+ * 取消或空闲：LED 熄灭
+ */
+static void feedback_idle(void)
+{
+    ESP_LOGI(TAG, "=== 回到空闲状态（LED 熄灭） ===");
+    led_off();
 }
 
 /* ==================== HTTP 通信 ==================== */
@@ -296,8 +309,7 @@ static void handle_button_press(void)
     ESP_LOGI(TAG, "按键按下 (#%d)", s_button_press_count);
 
     /* 1. 立即本地反馈（不依赖网络） */
-    led_blink(3, 200);  /* 闪烁 3 次，每次 200ms */
-    ESP_LOGI(TAG, "本地反馈完成：LED 闪烁 3 次");
+    local_feedback();
 
     /* 2. 如果已有待处理求助，忽略本次按键 */
     if (s_help_state == HELP_PENDING) {
@@ -336,12 +348,10 @@ static void handle_button_press(void)
 static void handle_help_response(const char *status)
 {
     if (strcmp(status, "responded") == 0) {
-        ESP_LOGI(TAG, "收到回应：LED 长亮确认");
-        led_on();
+        feedback_responded();
         s_help_state = HELP_RESPONDED;
     } else if (strcmp(status, "cancelled") == 0) {
-        ESP_LOGI(TAG, "求助已取消：LED 熄灭");
-        led_off();
+        feedback_idle();
         s_help_state = HELP_CANCELLED;
         s_request_id[0] = '\0';
     }
