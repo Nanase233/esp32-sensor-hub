@@ -347,6 +347,124 @@
 
         .nl-examples button:hover { background: #475569 !important; }
 
+        /* ===== 语音输入区域（第 5 周任务） ===== */
+        .voice-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 0 0 0;
+            border-top: 1px solid #334155;
+            margin-top: 10px;
+        }
+
+        .voice-btn {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            border: 2px solid #475569;
+            background: #334155;
+            color: #e2e8f0;
+            font-size: 1.4em;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            flex-shrink: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .voice-btn:hover { background: #475569; border-color: #64748b; }
+        .voice-btn:active { transform: scale(0.95); }
+
+        .voice-btn.recording {
+            background: #dc2626;
+            border-color: #ef4444;
+            color: white;
+            animation: pulse-record 1s infinite;
+        }
+
+        @keyframes pulse-record {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.5); }
+            50% { box-shadow: 0 0 0 10px rgba(220,38,38,0); }
+        }
+
+        .voice-status {
+            flex: 1;
+            font-size: 0.85em;
+            color: #94a3b8;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .voice-status .stage-icon { font-size: 1.1em; }
+        .voice-status .stage-text { color: #e2e8f0; font-weight: 500; }
+
+        .voice-timer {
+            font-variant-numeric: tabular-nums;
+            color: #f87171;
+            font-weight: 600;
+            font-size: 0.9em;
+        }
+
+        .voice-waveform {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            height: 20px;
+        }
+
+        .voice-waveform .bar {
+            width: 3px;
+            background: #f87171;
+            border-radius: 2px;
+            animation: wave 0.5s ease-in-out infinite alternate;
+        }
+
+        .voice-waveform .bar:nth-child(1) { height: 6px; animation-delay: 0s; }
+        .voice-waveform .bar:nth-child(2) { height: 12px; animation-delay: 0.1s; }
+        .voice-waveform .bar:nth-child(3) { height: 18px; animation-delay: 0.2s; }
+        .voice-waveform .bar:nth-child(4) { height: 10px; animation-delay: 0.3s; }
+        .voice-waveform .bar:nth-child(5) { height: 14px; animation-delay: 0.15s; }
+
+        @keyframes wave {
+            0% { transform: scaleY(0.4); }
+            100% { transform: scaleY(1); }
+        }
+
+        /* 音频播放器 */
+        .audio-player {
+            margin-top: 8px;
+            padding: 8px 12px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .audio-player audio {
+            flex: 1;
+            height: 32px;
+        }
+
+        .audio-player .play-btn {
+            background: #059669;
+            border: none;
+            color: white;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            font-size: 0.9em;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
         /* ===== 页脚 ===== */
         .footer {
             text-align: center;
@@ -426,6 +544,14 @@
                         <button onclick="quickNl('重新采集一次')">重新采集一次</button>
                         <button onclick="quickNl('最近一次加速度是多少')">最近加速度</button>
                         <button onclick="quickNl('今天天气如何')">越界测试</button>
+                    </div>
+
+                    <!-- 语音输入（第 5 周任务） -->
+                    <div class="voice-section">
+                        <button class="voice-btn" id="voice-btn" title="按住录音，松开发送">🎙️</button>
+                        <div class="voice-status" id="voice-status">
+                            <span>点击开始录音，松开结束</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -807,6 +933,198 @@
                 } else { const err = await resp.json(); addNlMessage(err.error || '请求失败', 'error'); }
             } catch (e) { console.error('NL 查询失败:', e); addNlMessage('网络错误', 'error'); }
         }
+
+        // ==================== 语音输入（第 5 周任务） ====================
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+        let recordTimer = null;
+        let recordSeconds = 0;
+        let currentAudio = null;
+
+        // 设置语音状态显示
+        function setVoiceStage(stage, text) {
+            const statusEl = document.getElementById('voice-status');
+            const icons = {
+                'idle': '',
+                'recording': '<div class="voice-waveform"><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>',
+                'recognizing': '🔄',
+                'executing': '⚙️',
+                'playing': '🔊',
+                'error': '❌'
+            };
+            const timerHtml = (stage === 'recording') ? `<span class="voice-timer" id="voice-timer">0:00</span>` : '';
+            statusEl.innerHTML = `<span class="stage-icon">${icons[stage] || ''}</span><span class="stage-text">${text}</span>${timerHtml}`;
+        }
+
+        // 更新录音计时器
+        function updateRecordTimer() {
+            recordSeconds++;
+            const min = Math.floor(recordSeconds / 60);
+            const sec = recordSeconds % 60;
+            const timerEl = document.getElementById('voice-timer');
+            if (timerEl) timerEl.textContent = `${min}:${sec.toString().padStart(2, '0')}`;
+        }
+
+        // 开始录音
+        async function startRecording() {
+            if (isRecording) return;
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (e) => {
+                    if (e.data.size > 0) audioChunks.push(e.data);
+                };
+
+                mediaRecorder.onstop = () => {
+                    stream.getTracks().forEach(t => t.stop());
+                    sendVoiceQuery();
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                recordSeconds = 0;
+                recordTimer = setInterval(updateRecordTimer, 1000);
+
+                const btn = document.getElementById('voice-btn');
+                btn.classList.add('recording');
+                btn.textContent = '⏹️';
+                setVoiceStage('recording', '录音中...');
+
+                // 禁用文字输入
+                document.getElementById('nl-input').disabled = true;
+            } catch (e) {
+                console.error('麦克风访问失败:', e);
+                setVoiceStage('error', '无法访问麦克风，请检查权限');
+                addNlMessage('无法访问麦克风，请在浏览器设置中允许麦克风权限。', 'error');
+            }
+        }
+
+        // 停止录音
+        function stopRecording() {
+            if (!isRecording || !mediaRecorder) return;
+            mediaRecorder.stop();
+            isRecording = false;
+            clearInterval(recordTimer);
+
+            const btn = document.getElementById('voice-btn');
+            btn.classList.remove('recording');
+            btn.textContent = '🎙️';
+            setVoiceStage('recognizing', '识别中...');
+        }
+
+        // 发送语音查询
+        async function sendVoiceQuery() {
+            if (audioChunks.length === 0) {
+                setVoiceStage('error', '未录制到音频');
+                addNlMessage('未检测到声音，请重试。', 'error');
+                resetVoiceUI();
+                return;
+            }
+
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            const formData = new FormData();
+            formData.append('file', audioBlob, 'voice.webm');
+
+            try {
+                setVoiceStage('recognizing', '识别中...');
+                const resp = await fetch('/api/voice_query', { method: 'POST', body: formData });
+
+                if (resp.ok) {
+                    const result = await resp.json();
+
+                    // 显示识别文本
+                    addNlMessage(`🎙️ "${result.input}"`, 'user', `来源: 语音输入 | 意图: ${result.intent}`);
+
+                    // 显示结果
+                    let msg = result.message || '未知结果';
+                    if (result.data) {
+                        const d = result.data;
+                        msg += `<br>ax=${d.ax?.toFixed(4) ?? '--'}, ay=${d.ay?.toFixed(4) ?? '--'}, az=${d.az?.toFixed(4) ?? '--'}`;
+                        if (d.timestamp) msg += `<br>时间戳: ${new Date(d.timestamp * 1000).toLocaleString()}`;
+                    }
+
+                    const sourceText = {'database':'数据库','device':'设备实时采集','timeout':'超时','intent_classifier':'意图识别'};
+                    addNlMessage(msg, result.success ? 'assistant' : 'error',
+                        `来源: ${sourceText[result.source]||result.source||'未知'} | 音频: ${result.audio_source||'无'} | 运行: ${result.run_location||'未知'}`);
+
+                    // 播放语音回复
+                    if (result.audio) {
+                        setVoiceStage('playing', '播放中...');
+                        playAudio(result.audio);
+                    } else {
+                        setVoiceStage('idle', '点击开始录音，松开结束');
+                    }
+
+                    // 更新图表
+                    if (result.success && result.source === 'device' && result.data) {
+                        chart.data.labels.push(new Date().toLocaleTimeString() + ' (语音)');
+                        chart.data.datasets[0].data.push(result.data.ax);
+                        chart.data.datasets[1].data.push(result.data.ay);
+                        chart.data.datasets[2].data.push(result.data.az);
+                        if (chart.data.labels.length > 50) { chart.data.labels.shift(); chart.data.datasets.forEach(ds => ds.data.shift()); }
+                        chart.update();
+                    }
+                } else {
+                    const err = await resp.json();
+                    setVoiceStage('error', err.error || '请求失败');
+                    addNlMessage(err.error || '语音查询失败', 'error');
+                }
+            } catch (e) {
+                console.error('语音查询失败:', e);
+                setVoiceStage('error', '网络错误');
+                addNlMessage('网络错误，请检查连接', 'error');
+            }
+
+            // 恢复文字输入
+            document.getElementById('nl-input').disabled = false;
+        }
+
+        // 播放音频
+        function playAudio(audioB64) {
+            // 停止之前的播放
+            if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+
+            const audioData = atob(audioB64);
+            const bytes = new Uint8Array(audioData.length);
+            for (let i = 0; i < audioData.length; i++) bytes[i] = audioData.charCodeAt(i);
+            const blob = new Blob([bytes], { type: 'audio/mpeg' });
+            const url = URL.createObjectURL(blob);
+
+            currentAudio = new Audio(url);
+            currentAudio.onended = () => {
+                setVoiceStage('idle', '点击开始录音，松开结束');
+                URL.revokeObjectURL(url);
+            };
+            currentAudio.onerror = () => {
+                setVoiceStage('idle', '点击开始录音，松开结束');
+                URL.revokeObjectURL(url);
+            };
+            currentAudio.play().catch(e => {
+                console.error('音频播放失败:', e);
+                setVoiceStage('idle', '点击开始录音，松开结束');
+            });
+        }
+
+        // 重置语音 UI
+        function resetVoiceUI() {
+            const btn = document.getElementById('voice-btn');
+            btn.classList.remove('recording');
+            btn.textContent = '️';
+            setVoiceStage('idle', '点击开始录音，松开结束');
+            document.getElementById('nl-input').disabled = false;
+        }
+
+        // 绑定录音按钮事件（点击切换）
+        document.getElementById('voice-btn').addEventListener('mousedown', startRecording);
+        document.getElementById('voice-btn').addEventListener('mouseup', stopRecording);
+        document.getElementById('voice-btn').addEventListener('mouseleave', () => { if (isRecording) stopRecording(); });
+        // 触屏支持
+        document.getElementById('voice-btn').addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
+        document.getElementById('voice-btn').addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
     </script>
 </body>
 </html>

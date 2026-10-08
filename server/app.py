@@ -22,6 +22,7 @@ import uuid
 import time
 import re
 import json
+import base64
 import urllib.request
 import urllib.error
 
@@ -36,6 +37,20 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-3.5-turbo")
 
 # LLM 超时（秒）
 LLM_TIMEOUT_S = 10
+
+# ==================== 语音服务配置（第 5 周任务） ====================
+# STT（语音转文字）配置
+STT_API_URL = os.environ.get("STT_API_URL", "")
+STT_API_KEY = os.environ.get("STT_API_KEY", "")
+STT_MODEL = os.environ.get("STT_MODEL", "whisper-1")
+STT_TIMEOUT_S = 15
+
+# TTS（文字转语音）配置
+TTS_API_URL = os.environ.get("TTS_API_URL", "")
+TTS_API_KEY = os.environ.get("TTS_API_KEY", "")
+TTS_MODEL = os.environ.get("TTS_MODEL", "tts-1")
+TTS_VOICE = os.environ.get("TTS_VOICE", "alloy")
+TTS_TIMEOUT_S = 15
 
 
 def call_llm(user_text: str) -> dict:
@@ -849,6 +864,291 @@ def nl_query():
         "reasoning": intent_result.get("reasoning", ""),
         **tool_result,
     })
+
+
+# ==================== 语音输入输出 API（第 5 周任务） ====================
+
+@app.route("/api/stt", methods=["POST"])
+def stt():
+    """
+    语音转文字（STT）。
+    接收浏览器上传的音频文件（WAV/WebM/MP3），调用授权语音识别服务。
+    返回识别文本 + 置信度。
+    服务不可用时返回结构化错误。
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "请上传音频文件", "field": "file"}), 400
+
+    audio_file = request.files["file"]
+    if not audio_file.filename:
+        return jsonify({"error": "未选择音频文件"}), 400
+
+    # 检查 STT 服务是否可用
+    if not STT_API_URL or not STT_API_KEY:
+        return jsonify({
+            "error": "语音识别服务未配置",
+            "fallback": "请使用文字输入",
+            "source": "stt_config"
+        }), 503
+
+    # 构建 multipart 请求调用 STT 服务
+    boundary = "----FormBoundary" + str(uuid.uuid4()).replace("-", "")
+    content_type = f"multipart/form-data; boundary={boundary}"
+
+    body = b""
+    # 文件部分
+    body += f"--{boundary}\r\n".encode()
+    body += f'Content-Disposition: form-data; name="file"; filename="{audio_file.filename}"\r\n'.encode()
+    body += b"Content-Type: application/octet-stream\r\n\r\n"
+    body += audio_file.read()
+    body += b"\r\n"
+    # 模型部分
+    body += f"--{boundary}\r\n".encode()
+    body += b'Content-Disposition: form-data; name="model"\r\n\r\n'
+    body += STT_MODEL.encode()
+    body += b"\r\n"
+    # 语言部分
+    body += f"--{boundary}\r\n".encode()
+    body += b'Content-Disposition: form-data; name="language"\r\n\r\n'
+    body += b"zh"
+    body += b"\r\n"
+    body += f"--{boundary}--\r\n".encode()
+
+    req = urllib.request.Request(
+        STT_API_URL,
+        data=body,
+        headers={
+            "Content-Type": content_type,
+            "Authorization": f"Bearer {STT_API_KEY}"
+        },
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=STT_TIMEOUT_S) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+            text = result.get("text", "").strip()
+            if not text:
+                return jsonify({
+                    "error": "未检测到语音内容",
+                    "source": "stt_silence"
+                }), 400
+            return jsonify({
+                "text": text,
+                "source": "stt",
+                "model": STT_MODEL
+            })
+    except urllib.error.HTTPError as e:
+        return jsonify({
+            "error": f"语音识别服务返回错误: {e.code}",
+            "fallback": "请使用文字输入",
+            "source": "stt_error"
+        }), 502
+    except Exception as e:
+        return jsonify({
+            "error": f"语音识别服务超时或不可用: {str(e)}",
+            "fallback": "请使用文字输入",
+            "source": "stt_timeout"
+        }), 504
+
+
+@app.route("/api/tts", methods=["POST"])
+def tts():
+    """
+    文字转语音（TTS）。
+    接收文本，调用语音合成服务，返回音频数据（base64）。
+    服务不可用时返回结构化错误。
+    """
+    data = request.get_json() or {}
+    text = data.get("text", "").strip()
+
+    if not text:
+        return jsonify({"error": "请输入要转换的文本"}), 400
+
+    # 检查 TTS 服务是否可用
+    if not TTS_API_URL or not TTS_API_KEY:
+        return jsonify({
+            "error": "语音合成服务未配置",
+            "fallback": "请查看文字结果",
+            "source": "tts_config"
+        }), 503
+
+    # 构建请求调用 TTS 服务
+    payload = json.dumps({
+        "model": TTS_MODEL,
+        "voice": TTS_VOICE,
+        "input": text,
+        "response_format": "mp3"
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        TTS_API_URL,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {TTS_API_KEY}"
+        },
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=TTS_TIMEOUT_S) as resp:
+            audio_data = resp.read()
+            audio_b64 = base64.b64encode(audio_data).decode("utf-8")
+            return jsonify({
+                "audio": audio_b64,
+                "format": "mp3",
+                "source": "tts",
+                "model": TTS_MODEL
+            })
+    except urllib.error.HTTPError as e:
+        return jsonify({
+            "error": f"语音合成服务返回错误: {e.code}",
+            "fallback": "请查看文字结果",
+            "source": "tts_error"
+        }), 502
+    except Exception as e:
+        return jsonify({
+            "error": f"语音合成服务超时或不可用: {str(e)}",
+            "fallback": "请查看文字结果",
+            "source": "tts_timeout"
+        }), 504
+
+
+@app.route("/api/voice_query", methods=["POST"])
+def voice_query():
+    """
+    语音查询统一入口（第 5 周任务）。
+    流程：接收音频 → STT 转文本 → 复用 nl_query 逻辑 → TTS 合成 → 返回音频 + 文本结果。
+    记录音频来源（浏览器麦克风）和运行位置（服务端）。
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "请上传音频文件"}), 400
+
+    audio_file = request.files["file"]
+
+    # 步骤 1: STT 转文本
+    if not STT_API_URL or not STT_API_KEY:
+        return jsonify({
+            "error": "语音识别服务未配置，请使用文字输入",
+            "source": "stt_config",
+            "stage": "stt"
+        }), 503
+
+    # 内部调用 STT
+    boundary = "----FormBoundary" + str(uuid.uuid4()).replace("-", "")
+    content_type = f"multipart/form-data; boundary={boundary}"
+
+    body = b""
+    body += f"--{boundary}\r\n".encode()
+    body += f'Content-Disposition: form-data; name="file"; filename="{audio_file.filename}"\r\n'.encode()
+    body += b"Content-Type: application/octet-stream\r\n\r\n"
+    body += audio_file.read()
+    body += b"\r\n"
+    body += f"--{boundary}\r\n".encode()
+    body += b'Content-Disposition: form-data; name="model"\r\n\r\n'
+    body += STT_MODEL.encode()
+    body += b"\r\n"
+    body += f"--{boundary}\r\n".encode()
+    body += b'Content-Disposition: form-data; name="language"\r\n\r\n'
+    body += b"zh"
+    body += b"\r\n"
+    body += f"--{boundary}--\r\n".encode()
+
+    req = urllib.request.Request(
+        STT_API_URL,
+        data=body,
+        headers={
+            "Content-Type": content_type,
+            "Authorization": f"Bearer {STT_API_KEY}"
+        },
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=STT_TIMEOUT_S) as resp:
+            stt_result = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return jsonify({
+            "error": f"语音识别失败: {str(e)}",
+            "source": "stt_error",
+            "stage": "stt"
+        }), 502
+
+    text = stt_result.get("text", "").strip()
+    if not text:
+        return jsonify({
+            "error": "未检测到语音内容",
+            "source": "stt_silence",
+            "stage": "stt"
+        }), 400
+
+    # 步骤 2: 复用 nl_query 逻辑
+    intent_result = classify_intent(text)
+    intent = intent_result.get("intent", "out_of_scope")
+
+    if intent == "query_last":
+        tool_result = query_last_data(intent_result.get("device_id"), intent_result.get("sensor"))
+    elif intent == "collect_new":
+        tool_result = collect_new_data(intent_result.get("device_id"), intent_result.get("sensor"))
+    elif intent == "ambiguous":
+        tool_result = {
+            "success": False,
+            "message": "您的请求不够明确。请说明是'查看上次数据'还是'重新采集一次'？",
+            "source": "intent_classifier",
+        }
+    else:
+        tool_result = {
+            "success": False,
+            "message": "抱歉，我只能处理传感器数据查询和采集相关的请求。",
+            "source": "intent_classifier",
+        }
+
+    nl_result = {
+        "input": text,
+        "intent": intent,
+        "intent_source": intent_result.get("source", "unknown"),
+        "reasoning": intent_result.get("reasoning", ""),
+        **tool_result,
+    }
+
+    # 步骤 3: TTS 合成回复文本
+    response_text = nl_result.get("message", "未知结果")
+    if nl_result.get("data"):
+        d = nl_result["data"]
+        response_text += f"，加速度 X={d.get('ax', 0):.2f}，Y={d.get('ay', 0):.2f}，Z={d.get('az', 0):.2f}"
+
+    audio_b64 = None
+    tts_source = None
+    if TTS_API_URL and TTS_API_KEY:
+        try:
+            tts_payload = json.dumps({
+                "model": TTS_MODEL,
+                "voice": TTS_VOICE,
+                "input": response_text,
+                "response_format": "mp3"
+            }).encode("utf-8")
+            tts_req = urllib.request.Request(
+                TTS_API_URL,
+                data=tts_payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {TTS_API_KEY}"
+                },
+                method="POST"
+            )
+            with urllib.request.urlopen(tts_req, timeout=TTS_TIMEOUT_S) as tts_resp:
+                audio_b64 = base64.b64encode(tts_resp.read()).decode("utf-8")
+                tts_source = "tts"
+        except Exception:
+            tts_source = "tts_unavailable"
+
+    nl_result["audio"] = audio_b64
+    nl_result["tts_source"] = tts_source
+    nl_result["audio_source"] = "browser_mic"
+    nl_result["run_location"] = "server"
+
+    return jsonify(nl_result)
 
 
 if __name__ == "__main__":
