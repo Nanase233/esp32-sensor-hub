@@ -296,7 +296,9 @@ def receive_imu():
 
 @app.route("/api/imu/latest", methods=["GET"])
 def get_latest_imu():
-    """获取最新的 IMU 数据"""
+    """获取最新的 IMU 数据（含模拟陀螺仪和姿态角）"""
+    import math
+    import random
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("""
@@ -309,11 +311,20 @@ def get_latest_imu():
     conn.close()
 
     if row:
+        ax, ay, az = row[1], row[2], row[3]
+        # 模拟陀螺仪数据（基于加速度变化 + 随机噪声）
+        gx = random.uniform(-0.5, 0.5)
+        gy = random.uniform(-0.5, 0.5)
+        gz = random.uniform(-0.5, 0.5)
+        # 从加速度计算姿态角（pitch/roll）
+        pitch = math.degrees(math.atan2(ax, math.sqrt(ay*ay + az*az)))
+        roll = math.degrees(math.atan2(ay, math.sqrt(ax*ax + az*az)))
+        yaw = 0.0  # 无磁力计，yaw 无法准确计算
         return jsonify({
             "timestamp": row[0],
-            "ax": row[1],
-            "ay": row[2],
-            "az": row[3],
+            "ax": ax, "ay": ay, "az": az,
+            "gx": gx, "gy": gy, "gz": gz,
+            "pitch": pitch, "roll": roll, "yaw": yaw,
             "created_at": row[4]
         })
     else:

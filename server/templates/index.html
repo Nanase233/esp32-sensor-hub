@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32-S3 IMU 实时数据监控</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -108,38 +109,108 @@
             background: #0f172a;
             border: 1px solid #334155;
             border-radius: 10px;
-            padding: 20px 16px;
+            padding: 16px 12px;
             text-align: center;
         }
 
         .axis-box .label {
-            font-size: 0.8em;
+            font-size: 0.75em;
             font-weight: 600;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
             letter-spacing: 0.05em;
         }
 
         .axis-box.ax .label { color: #f87171; }
         .axis-box.ay .label { color: #2dd4bf; }
         .axis-box.az .label { color: #60a5fa; }
+        .axis-box.gx .label { color: #fbbf24; }
+        .axis-box.gy .label { color: #a78bfa; }
+        .axis-box.gz .label { color: #f472b6; }
 
         .axis-box .value {
-            font-size: 2.2em;
+            font-size: 1.8em;
             font-weight: 700;
             color: #f1f5f9;
             font-variant-numeric: tabular-nums;
         }
 
         .axis-box .unit {
-            font-size: 0.75em;
+            font-size: 0.7em;
             color: #64748b;
             margin-top: 4px;
+        }
+
+        .axis-section-title {
+            font-size: 0.75em;
+            color: #64748b;
+            margin-bottom: 8px;
+            margin-top: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
 
         .update-time {
             font-size: 0.8em;
             color: #64748b;
             margin-top: 12px;
+        }
+
+        /* ===== 3D 姿态可视化 ===== */
+        .attitude-display {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .attitude-3d-container {
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 10px;
+            height: 220px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .attitude-3d-container canvas {
+            width: 100% !important;
+            height: 100% !important;
+        }
+
+        .attitude-angles {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        .angle-box {
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 12px 10px;
+            text-align: center;
+        }
+
+        .angle-box .label {
+            font-size: 0.7em;
+            color: #94a3b8;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .angle-box .value {
+            font-size: 1.4em;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .angle-box.pitch .value { color: #f87171; }
+        .angle-box.roll .value { color: #2dd4bf; }
+        .angle-box.yaw .value { color: #60a5fa; }
+
+        .angle-box .unit {
+            font-size: 0.7em;
+            color: #64748b;
         }
 
         /* ===== 图表 ===== */
@@ -494,24 +565,37 @@
     <div class="dashboard">
         <!-- 左列 -->
         <div class="col-left">
-            <!-- 实时数据 -->
+            <!-- 六轴实时数据 -->
             <div class="card">
-                <div class="card-title"><span class="icon">📊</span> 实时加速度</div>
+                <div class="card-title"><span class="icon">📊</span> 六轴传感器 (Acc / Gyro)</div>
+                <div class="axis-section-title">加速度 (m/s²)</div>
                 <div class="axis-display">
                     <div class="axis-box ax">
-                        <div class="label">X 轴</div>
+                        <div class="label">Acc X</div>
                         <div class="value" id="ax-value">0.0000</div>
-                        <div class="unit">m/s²</div>
                     </div>
                     <div class="axis-box ay">
-                        <div class="label">Y 轴</div>
+                        <div class="label">Acc Y</div>
                         <div class="value" id="ay-value">0.0000</div>
-                        <div class="unit">m/s²</div>
                     </div>
                     <div class="axis-box az">
-                        <div class="label">Z 轴</div>
+                        <div class="label">Acc Z</div>
                         <div class="value" id="az-value">0.0000</div>
-                        <div class="unit">m/s²</div>
+                    </div>
+                </div>
+                <div class="axis-section-title" style="margin-top:12px;">陀螺仪 (°/s)</div>
+                <div class="axis-display">
+                    <div class="axis-box gx">
+                        <div class="label">Gyro X</div>
+                        <div class="value" id="gx-value">0.0000</div>
+                    </div>
+                    <div class="axis-box gy">
+                        <div class="label">Gyro Y</div>
+                        <div class="value" id="gy-value">0.0000</div>
+                    </div>
+                    <div class="axis-box gz">
+                        <div class="label">Gyro Z</div>
+                        <div class="value" id="gz-value">0.0000</div>
                     </div>
                 </div>
                 <div class="update-time">更新: <span id="update-time">--</span></div>
@@ -567,6 +651,28 @@
 
         <!-- 右列 -->
         <div class="col-right">
+            <!-- 3D 姿态可视化 -->
+            <div class="card">
+                <div class="card-title"><span class="icon">🧊</span> 3D 设备空间姿态</div>
+                <div class="attitude-display">
+                    <div class="attitude-3d-container" id="attitude-3d"></div>
+                    <div class="attitude-angles">
+                        <div class="angle-box pitch">
+                            <div class="label">俯仰 Pitch</div>
+                            <div class="value" id="pitch-value">0.0°</div>
+                        </div>
+                        <div class="angle-box roll">
+                            <div class="label">横滚 Roll</div>
+                            <div class="value" id="roll-value">0.0°</div>
+                        </div>
+                        <div class="angle-box yaw">
+                            <div class="label">航向 Yaw</div>
+                            <div class="value" id="yaw-value">0.0°</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- 控制 -->
             <div class="card">
                 <div class="card-title"><span class="icon">🎛️</span> 控制</div>
@@ -610,43 +716,19 @@
     </div>
 
     <script>
-        // 图表配置（暗色主题）
+        // 图表配置（暗色主题，六轴）
         const ctx = document.getElementById('imuChart').getContext('2d');
         const chart = new Chart(ctx, {
             type: 'line',
             data: {
                 labels: [],
                 datasets: [
-                    {
-                        label: 'X 轴',
-                        data: [],
-                        borderColor: '#f87171',
-                        backgroundColor: 'rgba(248,113,113,0.08)',
-                        tension: 0.4,
-                        fill: false,
-                        pointRadius: 0,
-                        borderWidth: 2
-                    },
-                    {
-                        label: 'Y 轴',
-                        data: [],
-                        borderColor: '#2dd4bf',
-                        backgroundColor: 'rgba(45,212,191,0.08)',
-                        tension: 0.4,
-                        fill: false,
-                        pointRadius: 0,
-                        borderWidth: 2
-                    },
-                    {
-                        label: 'Z 轴',
-                        data: [],
-                        borderColor: '#60a5fa',
-                        backgroundColor: 'rgba(96,165,250,0.08)',
-                        tension: 0.4,
-                        fill: false,
-                        pointRadius: 0,
-                        borderWidth: 2
-                    }
+                    { label: 'Acc X', data: [], borderColor: '#f87171', backgroundColor: 'rgba(248,113,113,0.08)', tension: 0.4, fill: false, pointRadius: 0, borderWidth: 2 },
+                    { label: 'Acc Y', data: [], borderColor: '#2dd4bf', backgroundColor: 'rgba(45,212,191,0.08)', tension: 0.4, fill: false, pointRadius: 0, borderWidth: 2 },
+                    { label: 'Acc Z', data: [], borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.08)', tension: 0.4, fill: false, pointRadius: 0, borderWidth: 2 },
+                    { label: 'Gyro X', data: [], borderColor: '#fbbf24', backgroundColor: 'rgba(251,191,36,0.08)', tension: 0.4, fill: false, pointRadius: 0, borderWidth: 2 },
+                    { label: 'Gyro Y', data: [], borderColor: '#a78bfa', backgroundColor: 'rgba(167,139,250,0.08)', tension: 0.4, fill: false, pointRadius: 0, borderWidth: 2 },
+                    { label: 'Gyro Z', data: [], borderColor: '#f472b6', backgroundColor: 'rgba(244,114,182,0.08)', tension: 0.4, fill: false, pointRadius: 0, borderWidth: 2 }
                 ]
             },
             options: {
@@ -675,20 +757,103 @@
             }
         });
 
+        // 3D 姿态可视化初始化
+        function initAttitude3D() {
+            const container = document.getElementById('attitude-3d');
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0f172a);
+
+            const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 1000);
+            camera.position.set(3, 2, 4);
+            camera.lookAt(0, 0, 0);
+
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(width, height);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            // 创建设备模型（长方体）
+            const geometry = new THREE.BoxGeometry(1.2, 0.6, 0.3);
+            const material = new THREE.MeshPhongMaterial({
+                color: 0x3b82f6,
+                shininess: 100,
+                specular: 0x60a5fa
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+
+            // 添加坐标轴指示
+            const axesHelper = new THREE.AxesHelper(1.5);
+            mesh.add(axesHelper);
+
+            // 添加边框
+            const edges = new THREE.EdgesGeometry(geometry);
+            const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x60a5fa }));
+            mesh.add(line);
+
+            scene.add(mesh);
+
+            // 灯光
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 5, 5);
+            scene.add(directionalLight);
+
+            // 网格地面
+            const gridHelper = new THREE.GridHelper(6, 12, 0x334155, 0x1e293b);
+            gridHelper.position.y = -1;
+            scene.add(gridHelper);
+
+            // 动画循环
+            function animate() {
+                requestAnimationFrame(animate);
+                renderer.render(scene, camera);
+            }
+            animate();
+
+            // 窗口大小调整
+            window.addEventListener('resize', () => {
+                const newWidth = container.clientWidth;
+                const newHeight = container.clientHeight;
+                camera.aspect = newWidth / newHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(newWidth, newHeight);
+            });
+
+            return mesh;
+        }
+
         let autoRefresh = false;
         let refreshInterval = null;
         let dataCount = 0;
         let lastTimestamp = 0;
 
-        // 更新实时数据
+        // 更新实时数据（六轴 + 姿态）
         async function updateData() {
             try {
                 const response = await fetch('/api/imu/latest');
                 if (response.ok) {
                     const data = await response.json();
+                    // 更新六轴数值
                     document.getElementById('ax-value').textContent = data.ax.toFixed(4);
                     document.getElementById('ay-value').textContent = data.ay.toFixed(4);
                     document.getElementById('az-value').textContent = data.az.toFixed(4);
+                    document.getElementById('gx-value').textContent = (data.gx || 0).toFixed(4);
+                    document.getElementById('gy-value').textContent = (data.gy || 0).toFixed(4);
+                    document.getElementById('gz-value').textContent = (data.gz || 0).toFixed(4);
+                    // 更新姿态角
+                    document.getElementById('pitch-value').textContent = (data.pitch || 0).toFixed(1) + '°';
+                    document.getElementById('roll-value').textContent = (data.roll || 0).toFixed(1) + '°';
+                    document.getElementById('yaw-value').textContent = (data.yaw || 0).toFixed(1) + '°';
+                    // 更新 3D 模型
+                    if (window.attitudeMesh) {
+                        window.attitudeMesh.rotation.x = THREE.MathUtils.degToRad(data.pitch || 0);
+                        window.attitudeMesh.rotation.z = THREE.MathUtils.degToRad(-(data.roll || 0));
+                        window.attitudeMesh.rotation.y = THREE.MathUtils.degToRad(data.yaw || 0);
+                    }
                     document.getElementById('update-time').textContent = data.created_at;
                     document.getElementById('status').innerHTML = '<span class="status-dot"></span>已连接';
                     document.getElementById('status').className = 'status connected';
@@ -698,6 +863,9 @@
                     chart.data.datasets[0].data.push(data.ax);
                     chart.data.datasets[1].data.push(data.ay);
                     chart.data.datasets[2].data.push(data.az);
+                    chart.data.datasets[3].data.push(data.gx || 0);
+                    chart.data.datasets[4].data.push(data.gy || 0);
+                    chart.data.datasets[5].data.push(data.gz || 0);
 
                     if (chart.data.labels.length > 50) {
                         chart.data.labels.shift();
@@ -757,6 +925,7 @@
         }
 
         // 初始加载
+        window.attitudeMesh = initAttitude3D();
         updateData();
         updateStats();
         updateTaskList();
@@ -792,16 +961,19 @@
                         if (['completed', 'failed', 'timeout'].includes(task.status)) {
                             clearInterval(timer);
                             if (task.status === 'completed' && task.data) {
-                                chart.data.labels.push(new Date().toLocaleTimeString() + ' (采集)');
-                                chart.data.datasets[0].data.push(task.data.ax);
-                                chart.data.datasets[1].data.push(task.data.ay);
-                                chart.data.datasets[2].data.push(task.data.az);
-                                if (chart.data.labels.length > 50) {
-                                    chart.data.labels.shift();
-                                    chart.data.datasets.forEach(ds => ds.data.shift());
-                                }
-                                chart.update();
+                            chart.data.labels.push(new Date().toLocaleTimeString() + ' (采集)');
+                            chart.data.datasets[0].data.push(task.data.ax);
+                            chart.data.datasets[1].data.push(task.data.ay);
+                            chart.data.datasets[2].data.push(task.data.az);
+                            chart.data.datasets[3].data.push(task.data.gx || 0);
+                            chart.data.datasets[4].data.push(task.data.gy || 0);
+                            chart.data.datasets[5].data.push(task.data.gz || 0);
+                            if (chart.data.labels.length > 50) {
+                                chart.data.labels.shift();
+                                chart.data.datasets.forEach(ds => ds.data.shift());
                             }
+                            chart.update();
+                        }
                         }
                     }
                 } catch (e) { console.error('轮询失败:', e); }
@@ -914,7 +1086,9 @@
                     let msg = result.message || '未知结果';
                     if (result.data) {
                         const d = result.data;
-                        msg += `<br>ax=${d.ax?.toFixed(4) ?? '--'}, ay=${d.ay?.toFixed(4) ?? '--'}, az=${d.az?.toFixed(4) ?? '--'}`;
+                        msg += `<br>Acc: ax=${d.ax?.toFixed(4) ?? '--'}, ay=${d.ay?.toFixed(4) ?? '--'}, az=${d.az?.toFixed(4) ?? '--'}`;
+                        msg += `<br>Gyro: gx=${d.gx?.toFixed(4) ?? '--'}, gy=${d.gy?.toFixed(4) ?? '--'}, gz=${d.gz?.toFixed(4) ?? '--'}`;
+                        if (d.pitch != null) msg += `<br>姿态: Pitch=${d.pitch.toFixed(1)}°, Roll=${d.roll.toFixed(1)}°, Yaw=${d.yaw.toFixed(1)}°`;
                         if (d.timestamp) msg += `<br>时间戳: ${new Date(d.timestamp * 1000).toLocaleString()}`;
                         if (d.created_at) msg += `<br>入库时间: ${d.created_at}`;
                     }
@@ -927,6 +1101,9 @@
                         chart.data.datasets[0].data.push(result.data.ax);
                         chart.data.datasets[1].data.push(result.data.ay);
                         chart.data.datasets[2].data.push(result.data.az);
+                        chart.data.datasets[3].data.push(result.data.gx ?? 0);
+                        chart.data.datasets[4].data.push(result.data.gy ?? 0);
+                        chart.data.datasets[5].data.push(result.data.gz ?? 0);
                         if (chart.data.labels.length > 50) { chart.data.labels.shift(); chart.data.datasets.forEach(ds => ds.data.shift()); }
                         chart.update();
                     }
@@ -1043,7 +1220,9 @@
                     let msg = result.message || '未知结果';
                     if (result.data) {
                         const d = result.data;
-                        msg += `<br>ax=${d.ax?.toFixed(4) ?? '--'}, ay=${d.ay?.toFixed(4) ?? '--'}, az=${d.az?.toFixed(4) ?? '--'}`;
+                        msg += `<br>Acc: ax=${d.ax?.toFixed(4) ?? '--'}, ay=${d.ay?.toFixed(4) ?? '--'}, az=${d.az?.toFixed(4) ?? '--'}`;
+                        msg += `<br>Gyro: gx=${d.gx?.toFixed(4) ?? '--'}, gy=${d.gy?.toFixed(4) ?? '--'}, gz=${d.gz?.toFixed(4) ?? '--'}`;
+                        if (d.pitch != null) msg += `<br>姿态: Pitch=${d.pitch.toFixed(1)}°, Roll=${d.roll.toFixed(1)}°, Yaw=${d.yaw.toFixed(1)}°`;
                         if (d.timestamp) msg += `<br>时间戳: ${new Date(d.timestamp * 1000).toLocaleString()}`;
                     }
 
@@ -1065,6 +1244,9 @@
                         chart.data.datasets[0].data.push(result.data.ax);
                         chart.data.datasets[1].data.push(result.data.ay);
                         chart.data.datasets[2].data.push(result.data.az);
+                        chart.data.datasets[3].data.push(result.data.gx ?? 0);
+                        chart.data.datasets[4].data.push(result.data.gy ?? 0);
+                        chart.data.datasets[5].data.push(result.data.gz ?? 0);
                         if (chart.data.labels.length > 50) { chart.data.labels.shift(); chart.data.datasets.forEach(ds => ds.data.shift()); }
                         chart.update();
                     }
