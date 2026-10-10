@@ -550,6 +550,112 @@
         ::-webkit-scrollbar-track { background: #0f172a; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+        /* ===== 第 6 周：停止按钮 ===== */
+        .stop-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: 2px solid #475569;
+            background: #334155;
+            color: #e2e8f0;
+            font-size: 1.1em;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            flex-shrink: 0;
+            margin-left: 8px;
+        }
+
+        .stop-btn:hover { background: #475569; border-color: #64748b; }
+        .stop-btn:active { transform: scale(0.95); }
+
+        /* ===== 第 6 周：语音确认对话框 ===== */
+        .voice-confirm-dialog {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            animation: fadeIn 0.2s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .voice-confirm-dialog .dialog-content {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+
+        .voice-confirm-dialog .dialog-title {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: #e2e8f0;
+            margin-bottom: 12px;
+        }
+
+        .voice-confirm-dialog .dialog-text {
+            font-size: 1.2em;
+            color: #38bdf8;
+            padding: 16px;
+            background: #0f172a;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+            word-break: break-word;
+        }
+
+        .voice-confirm-dialog .dialog-buttons {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }
+
+        .voice-confirm-dialog .dialog-buttons button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.95em;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .voice-confirm-dialog .btn-confirm {
+            background: #10b981;
+            color: white;
+        }
+
+        .voice-confirm-dialog .btn-confirm:hover { background: #059669; }
+
+        .voice-confirm-dialog .btn-edit {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .voice-confirm-dialog .btn-edit:hover { background: #2563eb; }
+
+        .voice-confirm-dialog .btn-cancel {
+            background: #64748b;
+            color: white;
+        }
+
+        .voice-confirm-dialog .btn-cancel:hover { background: #475569; }
     </style>
 </head>
 <body>
@@ -630,11 +736,12 @@
                         <button onclick="quickNl('今天天气如何')">越界测试</button>
                     </div>
 
-                    <!-- 语音输入（第 5 周任务） -->
+                    <!-- 语音输入（第 5/6 周任务：澄清与停止） -->
                     <div class="voice-section">
-                        <button class="voice-btn" id="voice-btn" title="按住录音，松开发送">🎙️</button>
+                        <button class="voice-btn" id="voice-btn" title="点击开始语音识别">🎙️</button>
+                        <button class="stop-btn" id="stop-audio-btn" title="停止播放">️</button>
                         <div class="voice-status" id="voice-status">
-                            <span>点击开始录音，松开结束</span>
+                            <span>点击麦克风开始语音输入</span>
                         </div>
                     </div>
                 </div>
@@ -1071,18 +1178,76 @@
             box.scrollTop = box.scrollHeight;
         }
 
+        // ==================== 第 6 周：请求 ID 管理与迟到结果过滤 ====================
+        let currentRequestId = null;  // 当前活跃请求 ID
+        let isProcessing = false;     // 是否正在处理请求
+        let queryStartTime = null;    // 查询开始时间（性能测量）
+
+        // 生成请求 ID
+        function generateRequestId() {
+            return Math.random().toString(36).substring(2, 10);
+        }
+
+        // 取消当前任务
+        async function cancelCurrentTask() {
+            if (!currentRequestId) return;
+            const requestId = currentRequestId;
+            currentRequestId = null;
+            isProcessing = false;
+
+            try {
+                await fetch('/api/cancel', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({request_id: requestId})
+                });
+                console.log('任务已取消:', requestId);
+            } catch (e) {
+                console.error('取消任务失败:', e);
+            }
+        }
+
         async function sendNlQuery() {
             const input = document.getElementById('nl-input');
             const text = input.value.trim();
             if (!text) return;
             input.value = '';
-            addNlMessage(text, 'user');
+
+            // 如果有正在处理的请求，先取消
+            if (isProcessing && currentRequestId) {
+                await cancelCurrentTask();
+            }
+
+            // 生成新的请求 ID
+            currentRequestId = generateRequestId();
+            isProcessing = true;
+            queryStartTime = performance.now();
+
+            addNlMessage(text, 'user', `请求 ID: ${currentRequestId}`);
+
             try {
                 const resp = await fetch('/api/nl_query', {
-                    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text})
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({text: text, request_id: currentRequestId})
                 });
+
                 if (resp.ok) {
                     const result = await resp.json();
+
+                    // 迟到结果过滤
+                    if (result.request_id !== currentRequestId) {
+                        console.log('丢弃迟到结果:', result.request_id, '当前:', currentRequestId);
+                        return;
+                    }
+
+                    // 检查是否被取消
+                    if (result.status === 'cancelled') {
+                        addNlMessage('任务已取消', 'error');
+                        isProcessing = false;
+                        return;
+                    }
+
                     let msg = result.message || '未知结果';
                     if (result.data) {
                         const d = result.data;
@@ -1094,8 +1259,9 @@
                     }
                     const sourceText = {'database':'数据库','device':'设备实时采集','timeout':'超时','intent_classifier':'意图识别'};
                     const intentText = {'query_last':'查询上次','collect_new':'重新采集','ambiguous':'意图模糊','out_of_scope':'超出范围'};
+                    const perfInfo = result.processing_time_ms ? ` | 处理：${result.processing_time_ms.toFixed(0)}ms` : '';
                     addNlMessage(msg, result.success ? 'assistant' : 'error',
-                        `来源: ${sourceText[result.source]||result.source||'未知'} | 意图: ${intentText[result.intent]||result.intent} | ${result.intent_source === 'llm' ? 'LLM' : '规则'}`);
+                        `来源: ${sourceText[result.source]||result.source||'未知'} | 意图: ${intentText[result.intent]||result.intent} | ${result.intent_source === 'llm' ? 'LLM' : '规则'}${perfInfo}`);
                     if (result.success && result.source === 'device' && result.data) {
                         chart.data.labels.push(new Date().toLocaleTimeString() + ' (NL)');
                         chart.data.datasets[0].data.push(result.data.ax);
@@ -1107,17 +1273,25 @@
                         if (chart.data.labels.length > 50) { chart.data.labels.shift(); chart.data.datasets.forEach(ds => ds.data.shift()); }
                         chart.update();
                     }
+
+                    // 性能测量：任务完成时间
+                    if (queryStartTime) {
+                        const totalTime = performance.now() - queryStartTime;
+                        console.log(`任务完成时间：${totalTime.toFixed(0)}ms (请求 ID: ${currentRequestId})`);
+                    }
                 } else { const err = await resp.json(); addNlMessage(err.error || '请求失败', 'error'); }
             } catch (e) { console.error('NL 查询失败:', e); addNlMessage('网络错误', 'error'); }
+            finally {
+                isProcessing = false;
+                currentRequestId = null;
+            }
         }
 
-        // ==================== 语音输入（第 5 周任务） ====================
-        let mediaRecorder = null;
-        let audioChunks = [];
-        let isRecording = false;
-        let recordTimer = null;
-        let recordSeconds = 0;
+        // ==================== 语音输入（浏览器内置语音识别 + 第 6 周澄清与停止） ====================
+        let speechRecognition = null;
+        let isListening = false;
         let currentAudio = null;
+        let pendingVoiceText = null;  // 待确认的语音识别文本
 
         // 设置语音状态显示
         function setVoiceStage(stage, text) {
@@ -1128,95 +1302,189 @@
                 'recognizing': '🔄',
                 'executing': '⚙️',
                 'playing': '🔊',
-                'error': '❌'
+                'error': '❌',
+                'confirming': '✏️'
             };
-            const timerHtml = (stage === 'recording') ? `<span class="voice-timer" id="voice-timer">0:00</span>` : '';
-            statusEl.innerHTML = `<span class="stage-icon">${icons[stage] || ''}</span><span class="stage-text">${text}</span>${timerHtml}`;
+            statusEl.innerHTML = `<span class="stage-icon">${icons[stage] || ''}</span><span class="stage-text">${text}</span>`;
         }
 
-        // 更新录音计时器
-        function updateRecordTimer() {
-            recordSeconds++;
-            const min = Math.floor(recordSeconds / 60);
-            const sec = recordSeconds % 60;
-            const timerEl = document.getElementById('voice-timer');
-            if (timerEl) timerEl.textContent = `${min}:${sec.toString().padStart(2, '0')}`;
+        // 显示确认对话框（第 6 周：澄清交互）
+        function showVoiceConfirmation(text) {
+            pendingVoiceText = text;
+            setVoiceStage('confirming', '请确认识别结果');
+
+            const dialog = document.createElement('div');
+            dialog.id = 'voice-confirm-dialog';
+            dialog.className = 'voice-confirm-dialog';
+            dialog.innerHTML = `
+                <div class="dialog-content">
+                    <div class="dialog-title">语音识别结果</div>
+                    <div class="dialog-text">"${text}"</div>
+                    <div class="dialog-buttons">
+                        <button class="btn-confirm" onclick="confirmVoiceQuery()">✓ 确认发送</button>
+                        <button class="btn-edit" onclick="editVoiceQuery()">✎ 编辑</button>
+                        <button class="btn-cancel" onclick="cancelVoiceQuery()">✗ 取消</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(dialog);
         }
 
-        // 开始录音
-        async function startRecording() {
-            if (isRecording) return;
+        // 隐藏确认对话框
+        function hideVoiceConfirmation() {
+            const dialog = document.getElementById('voice-confirm-dialog');
+            if (dialog) dialog.remove();
+            pendingVoiceText = null;
+        }
 
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-                audioChunks = [];
+        // 确认发送语音查询
+        function confirmVoiceQuery() {
+            if (pendingVoiceText) {
+                hideVoiceConfirmation();
+                executeVoiceQuery(pendingVoiceText);
+            }
+        }
 
-                mediaRecorder.ondataavailable = (e) => {
-                    if (e.data.size > 0) audioChunks.push(e.data);
-                };
+        // 编辑语音识别结果
+        function editVoiceQuery() {
+            if (pendingVoiceText) {
+                hideVoiceConfirmation();
+                document.getElementById('nl-input').value = pendingVoiceText;
+                document.getElementById('nl-input').focus();
+                setVoiceStage('idle', '点击麦克风开始语音输入');
+            }
+        }
 
-                mediaRecorder.onstop = () => {
-                    stream.getTracks().forEach(t => t.stop());
-                    sendVoiceQuery();
-                };
+        // 取消语音查询
+        function cancelVoiceQuery() {
+            hideVoiceConfirmation();
+            setVoiceStage('idle', '点击麦克风开始语音输入');
+            addNlMessage('已取消语音输入', 'error');
+        }
 
-                mediaRecorder.start();
-                isRecording = true;
-                recordSeconds = 0;
-                recordTimer = setInterval(updateRecordTimer, 1000);
+        // 初始化语音识别
+        function initSpeechRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                setVoiceStage('error', '浏览器不支持语音识别');
+                addNlMessage('当前浏览器不支持语音识别，请使用 Chrome/Edge 浏览器。', 'error');
+                return null;
+            }
 
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'zh-CN';
+            recognition.continuous = false;
+            recognition.interimResults = false;
+
+            recognition.onstart = () => {
+                isListening = true;
                 const btn = document.getElementById('voice-btn');
                 btn.classList.add('recording');
-                btn.textContent = '⏹️';
-                setVoiceStage('recording', '录音中...');
-
-                // 禁用文字输入
+                btn.textContent = '️';
+                setVoiceStage('recording', '正在聆听...');
                 document.getElementById('nl-input').disabled = true;
-            } catch (e) {
-                console.error('麦克风访问失败:', e);
-                setVoiceStage('error', '无法访问麦克风，请检查权限');
-                addNlMessage('无法访问麦克风，请在浏览器设置中允许麦克风权限。', 'error');
-            }
-        }
+            };
 
-        // 停止录音
-        function stopRecording() {
-            if (!isRecording || !mediaRecorder) return;
-            mediaRecorder.stop();
-            isRecording = false;
-            clearInterval(recordTimer);
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                console.log('语音识别结果:', transcript);
 
-            const btn = document.getElementById('voice-btn');
-            btn.classList.remove('recording');
-            btn.textContent = '🎙️';
-            setVoiceStage('recognizing', '识别中...');
-        }
+                if (transcript.trim()) {
+                    showVoiceConfirmation(transcript);
+                } else {
+                    setVoiceStage('error', '未识别到内容');
+                    addNlMessage('未识别到语音内容，请重试。', 'error');
+                    resetVoiceUI();
+                }
+            };
 
-        // 发送语音查询
-        async function sendVoiceQuery() {
-            if (audioChunks.length === 0) {
-                setVoiceStage('error', '未录制到音频');
-                addNlMessage('未检测到声音，请重试。', 'error');
+            recognition.onerror = (event) => {
+                console.error('语音识别错误:', event.error);
+                let msg = '语音识别失败';
+                if (event.error === 'no-speech') {
+                    msg = '未检测到语音，请靠近麦克风重试。';
+                } else if (event.error === 'audio-capture') {
+                    msg = '未找到麦克风设备，请检查麦克风是否已连接。';
+                } else if (event.error === 'not-allowed') {
+                    msg = '麦克风权限被拒绝。请点击浏览器地址栏左侧的🔒图标，将麦克风设置为"允许"。';
+                } else if (event.error === 'network') {
+                    msg = '网络连接错误，请检查网络后重试。';
+                } else {
+                    msg = `语音识别错误: ${event.error}`;
+                }
+                setVoiceStage('error', msg);
+                addNlMessage(msg, 'error');
                 resetVoiceUI();
-                return;
-            }
+            };
 
-            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-            const formData = new FormData();
-            formData.append('file', audioBlob, 'voice.webm');
+            recognition.onend = () => {
+                isListening = false;
+                const btn = document.getElementById('voice-btn');
+                btn.classList.remove('recording');
+                btn.textContent = '🎙️';
+                document.getElementById('nl-input').disabled = false;
+            };
+
+            return recognition;
+        }
+
+        // 开始语音识别
+        function startListening() {
+            if (isListening) return;
+
+            if (!speechRecognition) {
+                speechRecognition = initSpeechRecognition();
+                if (!speechRecognition) return;
+            }
 
             try {
-                setVoiceStage('recognizing', '识别中...');
-                const resp = await fetch('/api/voice_query', { method: 'POST', body: formData });
+                speechRecognition.start();
+            } catch (e) {
+                console.error('启动语音识别失败:', e);
+                setVoiceStage('error', '启动失败，请重试');
+            }
+        }
+
+        // 停止语音识别
+        function stopListening() {
+            if (!isListening || !speechRecognition) return;
+            speechRecognition.stop();
+        }
+
+        // 执行语音查询（带请求 ID 和性能测量）
+        async function executeVoiceQuery(text) {
+            setVoiceStage('executing', '处理中...');
+            addNlMessage(`🎙️ "${text}"`, 'user', '来源：语音输入');
+
+            if (isProcessing && currentRequestId) {
+                await cancelCurrentTask();
+            }
+
+            currentRequestId = generateRequestId();
+            isProcessing = true;
+            queryStartTime = performance.now();
+
+            try {
+                const resp = await fetch('/api/nl_query', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({text: text, request_id: currentRequestId})
+                });
 
                 if (resp.ok) {
                     const result = await resp.json();
 
-                    // 显示识别文本
-                    addNlMessage(`🎙️ "${result.input}"`, 'user', `来源: 语音输入 | 意图: ${result.intent}`);
+                    if (result.request_id !== currentRequestId) {
+                        console.log('丢弃迟到结果:', result.request_id, '当前:', currentRequestId);
+                        return;
+                    }
 
-                    // 显示结果
+                    if (result.status === 'cancelled') {
+                        addNlMessage('任务已取消', 'error');
+                        isProcessing = false;
+                        return;
+                    }
+
                     let msg = result.message || '未知结果';
                     if (result.data) {
                         const d = result.data;
@@ -1227,18 +1495,17 @@
                     }
 
                     const sourceText = {'database':'数据库','device':'设备实时采集','timeout':'超时','intent_classifier':'意图识别'};
+                    const perfInfo = result.processing_time_ms ? ` | 处理：${result.processing_time_ms.toFixed(0)}ms` : '';
                     addNlMessage(msg, result.success ? 'assistant' : 'error',
-                        `来源: ${sourceText[result.source]||result.source||'未知'} | 音频: ${result.audio_source||'无'} | 运行: ${result.run_location||'未知'}`);
+                        `来源: ${sourceText[result.source]||result.source||'未知'} | 运行: ${result.run_location||'未知'}${perfInfo}`);
 
-                    // 播放语音回复
                     if (result.audio) {
-                        setVoiceStage('playing', '播放中...');
+                        setVoiceStage('playing', '播放中... (点击停止)');
                         playAudio(result.audio);
                     } else {
-                        setVoiceStage('idle', '点击开始录音，松开结束');
+                        setVoiceStage('idle', '点击麦克风开始语音输入');
                     }
 
-                    // 更新图表
                     if (result.success && result.source === 'device' && result.data) {
                         chart.data.labels.push(new Date().toLocaleTimeString() + ' (语音)');
                         chart.data.datasets[0].data.push(result.data.ax);
@@ -1250,24 +1517,28 @@
                         if (chart.data.labels.length > 50) { chart.data.labels.shift(); chart.data.datasets.forEach(ds => ds.data.shift()); }
                         chart.update();
                     }
+
+                    if (queryStartTime) {
+                        const totalTime = performance.now() - queryStartTime;
+                        console.log(`语音任务完成时间：${totalTime.toFixed(0)}ms (请求 ID: ${currentRequestId})`);
+                    }
                 } else {
                     const err = await resp.json();
                     setVoiceStage('error', err.error || '请求失败');
-                    addNlMessage(err.error || '语音查询失败', 'error');
+                    addNlMessage(err.error || '查询失败', 'error');
                 }
             } catch (e) {
                 console.error('语音查询失败:', e);
                 setVoiceStage('error', '网络错误');
                 addNlMessage('网络错误，请检查连接', 'error');
+            } finally {
+                isProcessing = false;
+                currentRequestId = null;
             }
-
-            // 恢复文字输入
-            document.getElementById('nl-input').disabled = false;
         }
 
-        // 播放音频
+        // 播放音频（第 6 周：支持停止）
         function playAudio(audioB64) {
-            // 停止之前的播放
             if (currentAudio) { currentAudio.pause(); currentAudio = null; }
 
             const audioData = atob(audioB64);
@@ -1278,17 +1549,30 @@
 
             currentAudio = new Audio(url);
             currentAudio.onended = () => {
-                setVoiceStage('idle', '点击开始录音，松开结束');
+                setVoiceStage('idle', '点击麦克风开始语音输入');
                 URL.revokeObjectURL(url);
+                currentAudio = null;
             };
             currentAudio.onerror = () => {
-                setVoiceStage('idle', '点击开始录音，松开结束');
+                setVoiceStage('idle', '点击麦克风开始语音输入');
                 URL.revokeObjectURL(url);
+                currentAudio = null;
             };
             currentAudio.play().catch(e => {
                 console.error('音频播放失败:', e);
-                setVoiceStage('idle', '点击开始录音，松开结束');
+                setVoiceStage('idle', '点击麦克风开始语音输入');
+                currentAudio = null;
             });
+        }
+
+        // 停止音频播放（第 6 周：停止播报）
+        function stopAudioPlayback() {
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio = null;
+                setVoiceStage('idle', '已停止播放');
+                console.log('音频播放已停止');
+            }
         }
 
         // 重置语音 UI
@@ -1296,17 +1580,25 @@
             const btn = document.getElementById('voice-btn');
             btn.classList.remove('recording');
             btn.textContent = '🎙️';
-            setVoiceStage('idle', '点击开始录音，松开结束');
+            setVoiceStage('idle', '点击麦克风开始语音输入');
             document.getElementById('nl-input').disabled = false;
+            hideVoiceConfirmation();
         }
 
-        // 绑定录音按钮事件（点击切换）
-        document.getElementById('voice-btn').addEventListener('mousedown', startRecording);
-        document.getElementById('voice-btn').addEventListener('mouseup', stopRecording);
-        document.getElementById('voice-btn').addEventListener('mouseleave', () => { if (isRecording) stopRecording(); });
-        // 触屏支持
-        document.getElementById('voice-btn').addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
-        document.getElementById('voice-btn').addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
+        // 绑定语音按钮事件
+        document.getElementById('voice-btn').addEventListener('click', () => {
+            if (isListening) {
+                stopListening();
+            } else {
+                startListening();
+            }
+        });
+
+        // 绑定停止按钮事件（第 6 周）
+        const stopBtn = document.getElementById('stop-audio-btn');
+        if (stopBtn) {
+            stopBtn.addEventListener('click', stopAudioPlayback);
+        }
     </script>
 </body>
 </html>

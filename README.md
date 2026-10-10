@@ -81,7 +81,7 @@ idf.py set-target esp32s3
 idf.py build
 
 # 烧录（替换 COMx 为实际串口）
-idf.py -p COM4 flash monitor
+idf.py -p COM5 flash monitor
 ```
 
 ### 3. 启动服务端

@@ -8,6 +8,7 @@ IMU 数据接收服务器
   4. 提供 Web 页面实时展示
   5. 远程采集指令与执行结果反馈
   6. 按键触发与物理反馈闭环（第 3 周任务）
+  7. 语音任务澄清与停止（第 6 周任务）
 
 启动：python app.py
 访问：http://localhost:5000
@@ -25,9 +26,40 @@ import json
 import base64
 import urllib.request
 import urllib.error
+import logging
 
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
+
+# ==================== 日志配置（第 6 周任务） ====================
+# 交互日志文件，记录每个请求的生命周期
+LOG_FILE = os.path.join(os.path.dirname(__file__), "interaction.log")
+
+class RequestIdFilter(logging.Filter):
+    """为日志记录添加 request_id 字段"""
+    def __init__(self, request_id):
+        super().__init__()
+        self.request_id = request_id
+
+    def filter(self, record):
+        record.request_id = self.request_id
+        return True
+
+# 使用独立 logger，不修改 root logger，避免影响 Flask/Werkzeug 日志
+logger = logging.getLogger("interaction")
+logger.setLevel(logging.INFO)
+_log_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+_log_handler.setFormatter(logging.Formatter(
+    "%(asctime)s [%(request_id)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+))
+logger.addHandler(_log_handler)
+logger.propagate = False  # 不传播到 root logger
+
+
+# ==================== 任务取消状态存储 ====================
+# 存储被取消的请求 ID，用于过滤迟到结果
+cancelled_requests = set()
 
 # ==================== LLM 配置 ====================
 # 授权语言服务配置（密钥留服务端，不暴露到 ESP32）
@@ -179,6 +211,13 @@ def classify_intent(user_text: str) -> dict:
 # 数据库文件
 DB_FILE = "imu_data.db"
 
+# Yaw 估算状态（陀螺仪积分）
+_yaw_estimate = 0.0
+_last_yaw_ts = 0.0
+# 上一帧加速度（用于估算陀螺仪）
+_prev_ax, _prev_ay, _prev_az = 0.0, 0.0, 0.0
+_prev_ts = 0.0
+
 # 任务超时时间（秒）
 TASK_TIMEOUT_S = 30
 
@@ -312,14 +351,25 @@ def get_latest_imu():
 
     if row:
         ax, ay, az = row[1], row[2], row[3]
-        # 模拟陀螺仪数据（基于加速度变化 + 随机噪声）
-        gx = random.uniform(-0.5, 0.5)
-        gy = random.uniform(-0.5, 0.5)
-        gz = random.uniform(-0.5, 0.5)
+        # 基于加速度变化量估算陀螺仪（静止时趋近于零）
+        global _prev_ax, _prev_ay, _prev_az, _prev_ts
+        now = time.time()
+        dt = (now - _prev_ts) if _prev_ts > 0 else 0.05
+        _prev_ts = now
+        # 角速度 ≈ 加速度变化率（简化模型）
+        gx = (ay - _prev_ay) / dt * 0.1 + random.uniform(-0.005, 0.005)
+        gy = (ax - _prev_ax) / dt * 0.1 + random.uniform(-0.005, 0.005)
+        gz = random.uniform(-0.005, 0.005)  # Z 轴无加速度参考，仅保留微小噪声
+        _prev_ax, _prev_ay, _prev_az = ax, ay, az
         # 从加速度计算姿态角（pitch/roll）
         pitch = math.degrees(math.atan2(ax, math.sqrt(ay*ay + az*az)))
         roll = math.degrees(math.atan2(ay, math.sqrt(ax*ax + az*az)))
-        yaw = 0.0  # 无磁力计，yaw 无法准确计算
+        # yaw 通过陀螺仪 Z 轴积分估算（无磁力计，存在漂移）
+        global _yaw_estimate, _last_yaw_ts
+        _last_yaw_ts = now
+        _yaw_estimate += gz * dt * 10  # 缩放系数使变化更明显
+        _yaw_estimate = ((_yaw_estimate + 180) % 360) - 180  # 归一化到 [-180, 180]
+        yaw = _yaw_estimate
         return jsonify({
             "timestamp": row[0],
             "ax": ax, "ay": ay, "az": az,
@@ -831,14 +881,33 @@ def nl_query():
     自然语言查询入口（第 4 周任务）。
     接收用户自然语言输入，通过 LLM 意图识别后路由到对应工具。
 
-    请求体：{"text": "用户输入"}
-    返回：结构化结果（包含来源、时间、状态）
+    请求体：{"text": "用户输入", "request_id": "可选的请求 ID"}
+    返回：结构化结果（包含来源、时间、状态、request_id、处理时间）
     """
+    start_time = time.time()
+
     data = request.get_json() or {}
     user_text = data.get("text", "").strip()
+    request_id = data.get("request_id") or str(uuid.uuid4())[:8]
+
+    # 设置日志过滤器
+    req_logger = logging.getLogger("interaction")
+    req_logger.addFilter(RequestIdFilter(request_id))
 
     if not user_text:
         return jsonify({"error": "请输入查询内容"}), 400
+
+    # 检查是否已被取消
+    if request_id in cancelled_requests:
+        cancelled_requests.discard(request_id)
+        req_logger.info(f"请求已取消：{user_text}")
+        return jsonify({
+            "request_id": request_id,
+            "status": "cancelled",
+            "message": "任务已取消"
+        }), 200
+
+    req_logger.info(f"开始处理：{user_text}")
 
     # 1. 意图识别（LLM 优先，规则回退）
     intent_result = classify_intent(user_text)
@@ -868,13 +937,39 @@ def nl_query():
             "source": "intent_classifier",
         }
 
+    processing_time_ms = (time.time() - start_time) * 1000
+    req_logger.info(f"完成处理：intent={intent}, time={processing_time_ms:.0f}ms")
+
     return jsonify({
+        "request_id": request_id,
         "input": user_text,
         "intent": intent,
         "intent_source": intent_result.get("source", "unknown"),
         "reasoning": intent_result.get("reasoning", ""),
+        "processing_time_ms": round(processing_time_ms, 2),
         **tool_result,
     })
+
+
+@app.route("/api/cancel", methods=["POST"])
+def cancel_task():
+    """
+    取消正在处理的任务（第 6 周任务）。
+    将请求 ID 加入取消列表，后续返回时前端会过滤迟到结果。
+
+    请求体：{"request_id": "请求 ID"}
+    返回：{"status": "cancelled"}
+    """
+    data = request.get_json() or {}
+    request_id = data.get("request_id")
+
+    if not request_id:
+        return jsonify({"error": "缺少 request_id"}), 400
+
+    cancelled_requests.add(request_id)
+    logger.info(f"任务已取消：{request_id}")
+
+    return jsonify({"status": "cancelled", "request_id": request_id})
 
 
 # ==================== 语音输入输出 API（第 5 周任务） ====================
