@@ -1,2 +1,7 @@
 flask==3.0.0
 flask-cors==4.0.0
+
+# 第 8 周：视觉推理依赖（onnxruntime + numpy + Pillow）
+onnxruntime>=1.17
+numpy>=1.24
+Pillow>=10.0

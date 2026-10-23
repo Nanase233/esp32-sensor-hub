@@ -422,6 +422,60 @@
         }
         .image-frame img { max-width: 100%; display: block; }
 
+        /* ===== 第 8 周：推理结果反馈与样例对照 ===== */
+        .image-result { display: flex; flex-direction: column; gap: 10px; }
+        .result-card {
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            border-radius: 10px;
+            padding: 12px 14px;
+            font-size: 13px;
+            color: #cbd5e1;
+        }
+        .result-card .result-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .result-label { font-size: 16px; font-weight: 600; color: #f1f5f9; }
+        .result-badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+        .result-badge.ok { background: #064e3b; color: #6ee7b7; }
+        .result-badge.warn { background: #78350f; color: #fcd34d; }
+        .result-badge.err { background: #7f1d1d; color: #fca5a5; }
+        .result-meta { color: #94a3b8; font-size: 12px; }
+        .result-note { color: #fcd34d; font-size: 12px; margin-top: 4px; }
+        .result-caveat { color: #64748b; font-size: 12px; margin-top: 4px; }
+        .topk-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .topk-chip {
+            background: #1e293b; border: 1px solid #334155; color: #94a3b8;
+            border-radius: 12px; padding: 2px 10px; font-size: 12px; cursor: pointer;
+        }
+        .topk-chip:hover { border-color: #3b82f6; color: #e2e8f0; }
+        .correction-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+        .correction-row input {
+            flex: 1; min-width: 180px; padding: 8px 10px; background: #0f172a;
+            border: 1px solid #334155; border-radius: 6px; color: #e2e8f0;
+            font-size: 0.9em; outline: none;
+        }
+        .correction-row input:focus { border-color: #3b82f6; }
+        .feedback-box { margin-top: 10px; border-top: 1px dashed #334155; padding-top: 8px; }
+        .samples-compare { margin-top: 12px; border-top: 1px solid #334155; padding-top: 10px; }
+        .samples-title { color: #94a3b8; font-size: 13px; margin-bottom: 8px; }
+        .samples-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        .sample-col {
+            background: #0f172a; border: 1px solid #1e293b; border-radius: 10px;
+            padding: 10px; min-height: 80px;
+        }
+        .sample-col h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; }
+        .sample-col.c-normal h4 { color: #6ee7b7; }
+        .sample-col.c-low h4 { color: #fcd34d; }
+        .sample-col.c-error h4 { color: #fca5a5; }
+        .sample-col.c-misjudged h4 { color: #f0abfc; }
+        .sample-item {
+            font-size: 12px; color: #94a3b8; padding: 6px;
+            border-radius: 6px; cursor: pointer; margin-bottom: 4px;
+        }
+        .sample-item:hover { background: #1e293b; color: #e2e8f0; }
+        .sample-item .s-label { color: #e2e8f0; }
+        .sample-item .s-high { color: #f0abfc; font-weight: 600; }
+        @media (max-width: 900px) { .samples-grid { grid-template-columns: repeat(2, 1fr); } }
+
         .nl-examples { display: flex; flex-wrap: wrap; gap: 6px; }
 
         .nl-examples button {
@@ -771,17 +825,25 @@
                 </div>
             </div>
 
-            <!-- 环境图像（第 7 周任务：按需采集） -->
+            <!-- 环境图像（第 7 周按需采集 + 第 8 周视觉推理反馈） -->
             <div class="card nl-full">
-                <div class="card-title"><span class="icon">📷</span> 环境图像（按需采集）</div>
+                <div class="card-title"><span class="icon">📷</span> 环境图像（按需采集 · 视觉推理反馈）</div>
                 <div class="image-panel">
                     <div class="image-actions">
                         <button class="btn-primary" id="capture-image-btn" onclick="captureImage()">拍一张</button>
+                        <button class="btn-primary" id="recapture-btn" style="display:none" onclick="captureImage()">重新采集</button>
                         <span class="image-status" id="image-status">尚未采集</span>
                     </div>
                     <div class="image-frame" id="image-frame">
                         <span class="empty-text">点击"拍一张"获取当前环境图像</span>
                     </div>
+                    <!-- 第 8 周：输入（原图）- 模型结果 - 人工反馈，三者同 request_id 对应 -->
+                    <div id="image-result" class="image-result"></div>
+                </div>
+                <!-- 第 8 周：四类样例对照（正常 / 低分未知 / 错误失败 / 模型误判） -->
+                <div class="samples-compare">
+                    <div class="samples-title">样例对照：高分误判与正常样例比较（点击任一条目查看完整记录）</div>
+                    <div id="samples-grid" class="samples-grid"></div>
                 </div>
             </div>
         </div>
@@ -1067,6 +1129,7 @@
         updateStats();
         updateTaskList();
         updateHelpList();
+        loadSamplesCompare();   // 第 8 周：四类样例对照
         setInterval(updateStats, 5000);
         setInterval(updateTaskList, 2000);
         setInterval(updateHelpList, 2000);
@@ -1244,10 +1307,15 @@
                 if (result.status === 'captured') {
                     statusEl.textContent = `采集成功 · ${result.captured_at_text} · ${result.size_bytes} 字节 · 请求 ${result.request_id}`;
                     frame.innerHTML = `<img src="${result.file_url}?t=${Date.now()}" alt="环境图像">`;
+                    // 第 8 周：采集成功后展示推理结果（低分/未知会给出明确说明与重新采集入口）
+                    document.getElementById('recapture-btn').style.display = '';
+                    loadImageResult(result.request_id);
                 } else {
                     const text = statusMap[result.status] || result.status;
                     statusEl.textContent = `${text} · 请求 ${result.request_id}`;
                     frame.innerHTML = `<span class="empty-text">${text}</span>`;
+                    document.getElementById('recapture-btn').style.display = 'none';
+                    document.getElementById('image-result').innerHTML = '';
                 }
             } catch (e) {
                 statusEl.textContent = `采集失败：${e.message}`;
@@ -1256,6 +1324,156 @@
                 btn.disabled = false;
             }
         }
+
+        // ==================== 第 8 周：视觉推理结果反馈与人工纠错 ====================
+        // 当前查看的图像任务 ID：输入（原图）、模型结果、人工反馈都按它对应
+        let currentImageRequestId = null;
+
+        // HTML 转义（模型标签等外部文本注入页面前必须转义）
+        function esc(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g,
+                c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+        }
+
+        // 查询并渲染一次采集任务的"输入 - 模型结果 - 人工反馈"
+        async function loadImageResult(requestId) {
+            currentImageRequestId = requestId;
+            const box = document.getElementById('image-result');
+            box.innerHTML = '<div class="result-card result-meta">正在获取推理结果...</div>';
+            try {
+                const resp = await fetch(`/api/image/${requestId}/result`);
+                const r = await resp.json();
+                if (!resp.ok) throw new Error(r.error || '查询失败');
+                renderImageResult(r);
+            } catch (e) {
+                box.innerHTML = `<div class="result-card result-note">推理结果获取失败：${esc(e.message)}</div>`;
+            }
+        }
+
+        function renderImageResult(r) {
+            const box = document.getElementById('image-result');
+            const inf = r.inference;
+            const fb = r.feedback;
+            if (!inf) {
+                box.innerHTML = '<div class="result-card result-meta">该图像尚未进行推理（采集失败或模型当时不可用时不产出推理结果）</div>';
+                return;
+            }
+
+            // 状态徽标：ok=给出结论 / warn=拒识（还不能确定） / err=模型不可用
+            let badge, headText;
+            if (inf.status === 'ok' && !inf.is_rejected) {
+                badge = '<span class="result-badge ok">已给出结论</span>';
+                headText = `<span class="result-label">${esc(inf.label)}</span>`;
+            } else if (inf.status === 'unavailable') {
+                badge = '<span class="result-badge err">模型不可用</span>';
+                headText = '<span class="result-label">无法推理</span>';
+            } else {
+                badge = '<span class="result-badge warn">还不能确定</span>';
+                headText = '<span class="result-label">未给出确定结论</span>';
+            }
+
+            const pct = (inf.score == null) ? null : (inf.score * 100).toFixed(1) + '%';
+            const usabilityText = { clear: '画面可用', dark: '画面过暗', blur: '画面模糊', blocked: '疑似遮挡' }[inf.usability] || inf.usability;
+
+            let html = `<div class="result-card">
+                <div class="result-head">${headText}${badge}
+                    ${pct ? `<span class="result-meta">模型置信度 ${pct}</span>` : ''}
+                    <span class="result-meta">模型版本 ${esc(inf.model_version || '未知')}</span>
+                    ${inf.coarse ? `<span class="result-meta">场景粗分类 ${esc(inf.coarse)}</span>` : ''}
+                </div>
+                <div class="result-caveat">${esc(r.score_note || '')}　画面可用性：${esc(usabilityText)}</div>`;
+
+            // 拒识：明确表达"还有什么不能确定"及原因
+            if (inf.is_rejected) {
+                html += `<div class="result-note">还不能确定：${esc(inf.uncertain_note || inf.rejected_reason || '')}</div>`;
+            }
+            // 候选标签（点击填入纠错框）
+            if (inf.topk && inf.topk.length) {
+                html += '<div class="topk-chips">' + inf.topk.slice(0, 5).map(t =>
+                    `<span class="topk-chip" data-label="${esc(t.label)}">${esc(t.label)} ${(t.score * 100).toFixed(1)}%</span>`
+                ).join('') + '</div>';
+            }
+
+            // 人工纠错入口
+            html += `<div class="correction-row">
+                    <input id="correction-input" type="text" placeholder="人工纠错：这张图实际是什么？（如：办公桌面）">
+                    <button class="btn-primary" onclick="submitCorrection('${esc(inf.request_id)}')">提交纠错</button>
+                </div>`;
+
+            // 已有纠错：展示"模型原判 -> 人工修正"对照
+            if (fb) {
+                html += `<div class="feedback-box">
+                        <div><b style="color:#f0abfc">人工反馈</b>：${esc(fb.corrected_label)}${fb.note ? `（${esc(fb.note)}）` : ''}</div>
+                        <div class="result-meta">模型原判：${esc(fb.original_label || '（无结论）')}${fb.original_score != null ? ' ' + (fb.original_score * 100).toFixed(1) + '%' : ''} · ${esc(fb.created_at_text || '')}</div>
+                    </div>`;
+            }
+            html += '</div>';
+            box.innerHTML = html;
+        }
+
+        async function submitCorrection(requestId) {
+            const input = document.getElementById('correction-input');
+            const corrected = (input.value || '').trim();
+            if (!corrected) { alert('请先填写人工纠正后的标签'); return; }
+            try {
+                const resp = await fetch(`/api/image/${requestId}/feedback`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({corrected_label: corrected, note: ''})
+                });
+                const r = await resp.json();
+                if (!resp.ok) throw new Error(r.error || '提交失败');
+                loadImageResult(requestId);   // 刷新：模型原判 -> 人工修正
+                loadSamplesCompare();         // 刷新对照样例
+            } catch (e) {
+                alert('纠错提交失败：' + e.message);
+            }
+        }
+
+        // 四类样例对照：正常 / 低分未知 / 错误失败 / 模型误判（高分误判高亮）
+        async function loadSamplesCompare() {
+            const grid = document.getElementById('samples-grid');
+            try {
+                const resp = await fetch('/api/samples/compare');
+                const r = await resp.json();
+                if (!resp.ok) throw new Error(r.error || '查询失败');
+
+                const cols = [
+                    { key: 'normal', cls: 'c-normal', title: '正常（有结论）' },
+                    { key: 'low_score', cls: 'c-low', title: '低分 / 未知' },
+                    { key: 'error', cls: 'c-error', title: '错误 / 失败' },
+                    { key: 'misjudged', cls: 'c-misjudged', title: '模型误判' }
+                ];
+                grid.innerHTML = cols.map(col => {
+                    const items = (r.buckets[col.key] || []).slice(0, 8);
+                    const body = items.length ? items.map(it => {
+                        let main;
+                        if (it.corrected_label) {
+                            // 模型判断被人工否定：展示 模型原判 -> 人工修正
+                            main = `模型判 <span class="s-label">${esc(it.label || '无结论')}</span> → 人工 <span class="s-label">${esc(it.corrected_label)}</span>`;
+                        } else if (it.is_rejected) {
+                            main = `<span class="s-label">${esc(it.rejected_reason || '拒识')}</span>`;
+                        } else {
+                            main = `<span class="s-label">${esc(it.label || it.status)}</span>${it.score != null ? ' ' + (it.score * 100).toFixed(0) + '%' : ''}`;
+                        }
+                        const high = it.is_high_score ? ' <span class="s-high">高分误判</span>' : '';
+                        return `<div class="sample-item" onclick="loadImageResult('${esc(it.request_id)}')" title="点击查看该样例的完整记录">${main}${high}</div>`;
+                    }).join('') : '<div class="empty-text" style="font-size:12px">暂无</div>';
+                    return `<div class="sample-col ${col.cls}"><h4>${col.title}</h4>${body}</div>`;
+                }).join('');
+            } catch (e) {
+                grid.innerHTML = `<div class="empty-text">对照样例加载失败：${esc(e.message)}</div>`;
+            }
+        }
+
+        // 候选标签点击 -> 填入纠错框（事件委托，避免标签文本拼接进 onclick）
+        document.addEventListener('click', (e) => {
+            const chip = e.target.closest('.topk-chip');
+            if (chip) {
+                const input = document.getElementById('correction-input');
+                if (input) input.value = chip.dataset.label || '';
+            }
+        });
 
         function addNlMessage(text, type, meta) {
             const box = document.getElementById('nl-chat-box');

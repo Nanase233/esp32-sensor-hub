@@ -35,6 +35,10 @@
 - ✅ 环境图像按需采集 API（下发任务 / 上传 JPEG / 状态查询）
 - ✅ 图像采集失败记录（遮挡 blocked / 错误 error）与保留策略（保留最近 10 张）
 - ✅ 自然语言助手支持「环境取图」意图
+- ✅ 视觉推理结果结构化反馈：标签 / 置信度 / 模型版本 / 不确定说明（第 8 周）
+- ✅ 低分 / 画面不可用（暗、模糊、遮挡）→ 拒识，明确"还不能确定"及原因（第 8 周）
+- ✅ 人工纠错入口：模型原结果快照留存，比较高分误判与正常样例（第 8 周）
+- ✅ 四类样例对照：正常 / 低分未知 / 错误失败 / 模型误判（第 8 周）
 
 ## 硬件要求
 
@@ -98,11 +102,19 @@ cd server
 # 安装依赖
 pip install -r requirements.txt
 
+# 第 8 周：下载视觉推理模型（约 14MB，也可改用模型课推理服务，见下）
+python vision/models/fetch_model.py
+
 # 启动服务器
 python app.py
 ```
 
 访问 http://localhost:5000 查看实时数据。
+
+> **第 8 周模型后端切换**（教师基线与学生候选模型同一接口）：
+> - 默认 `MODEL_BACKEND=auto`：有 `TEACHER_MODEL_URL` 走模型课 HTTP 推理服务，否则用本地 ONNX 模型
+> - `MODEL_BACKEND=teacher`：强制教师基线；`MODEL_BACKEND=student`：学生候选模型（接入位）
+> - 模型分数是**未经校准的置信度**，界面只表述为"模型置信度"，不写成现实正确率
 
 ## 项目结构
 
@@ -125,7 +137,13 @@ esp32-imu/
 │   ├── requirements.txt       # Python 依赖
 │   ├── test_week6.py          # 第 6 周功能自动化测试
 │   ├── test_week7.py          # 第 7 周功能自动化测试
+│   ├── test_week8.py          # 第 8 周功能自动化测试
 │   ├── images/                # 采集到的环境图像（运行时生成）
+│   ├── vision/                # 视觉推理模块（第 8 周）
+│   │   ├── models.py          # 统一推理接口/教师基线/学生接入位/拒识逻辑
+│   │   └── models/            # 模型文件与测试夹具
+│   │       ├── fetch_model.py # 模型下载脚本（onnx 不入库）
+│   │       └── fixtures/      # 测试用真实采集图
 │   └── templates/
 │       └── index.html         # Web 前端页面
 ├── partitions.csv             # 8MB Flash 分区表（factory 3MB）
@@ -233,6 +251,26 @@ ESP32 上传 JPEG 图像，需携带 `X-Capture-Ts` 头（设备微秒时间戳�
 
 **GET** `/api/images`
 列出全部图像任务（保留最近 10 张，超出自动清理旧文件）。
+
+### 视觉推理与人工纠错（第 8 周）
+
+采集成功后自动推理一次；也可手动重推。所有结果按 `request_id` 与输入图像、人工反馈严格对应。
+
+**POST** `/api/image/<id>/infer`
+
+对已采集图像执行（重新）推理；模型不可用时返回 503（不伪造结果）。
+
+**GET** `/api/image/<id>/result`
+
+结构化结果：`image`（输入记录）+ `inference`（label/score/model_version/topk/usability/is_rejected/uncertain_note）+ `feedback`（人工纠错）+ `score_note`（分数语义提示）。
+
+**POST** `/api/image/<id>/feedback`
+
+人工纠错：`{corrected_label, note}`。模型原结果以快照留存（original_label/original_score），不覆盖推理结果。
+
+**GET** `/api/samples/compare`
+
+四类样例对照：`normal`（正常）/ `low_score`（低分或画面不可用）/ `error`（采集失败或无法解码）/ `misjudged`（被人工纠错，`is_high_score` 标记高分误判）。
 
 ## 排错指南
 

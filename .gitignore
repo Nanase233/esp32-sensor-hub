@@ -6,6 +6,9 @@ sdkconfig.old
 # ESP-IDF 组件缓存（由 idf_component.yml 拉取，无需入库）
 managed_components/
 
+# 视觉模型二进制（第 8 周，由 server/vision/models/fetch_model.py 下载）
+server/vision/models/*.onnx
+
 # Python
 __pycache__/
 *.py[cod]
