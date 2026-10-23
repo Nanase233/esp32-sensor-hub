@@ -22,6 +22,9 @@
 - ✅ HTTP POST 上传 IMU 数据
 - ✅ 串口实时输出（调试用）
 - ✅ 批量上传优化（减少网络请求）
+- ✅ OV2640 摄像头环境图像按需采集（RGB565 亮度/遮挡检测 + JPEG 抓取）
+- ✅ 图像采集任务状态机（pending → sent → received → captured / failed）
+- ✅ IMU I2C 总线与摄像头 SCCB 时分复用，采集后自动恢复 IMU 采样
 
 ### 服务端
 - ✅ Flask REST API 接收数据
@@ -29,6 +32,9 @@
 - ✅ Web 前端实时数据展示
 - ✅ 历史数据图表（Chart.js）
 - ✅ 数据统计与采样率计算
+- ✅ 环境图像按需采集 API（下发任务 / 上传 JPEG / 状态查询）
+- ✅ 图像采集失败记录（遮挡 blocked / 错误 error）与保留策略（保留最近 10 张）
+- ✅ 自然语言助手支持「环境取图」意图
 
 ## 硬件要求
 
@@ -108,13 +114,21 @@ esp32-imu/
 │   ├── qma7981.c              # QMA7981 驱动实现
 │   ├── wifi_manager.h         # WiFi 管理器头文件
 │   ├── wifi_manager.c         # WiFi 管理器实现
-│   ├── http_uploader.h        # HTTP 上传器头文件
-│   └── http_uploader.c        # HTTP 上传器实现
+│   ├── http_uploader.h        # HTTP 上传器头文件（含服务器地址）
+│   ├── http_uploader.c        # HTTP 上传器实现
+│   ├── command_handler.c      # 命令轮询与任务路由（含图像任务）
+│   ├── image_capture.h        # OV2640 拍照模块头文件
+│   ├── image_capture.c        # OV2640 拍照模块实现
+│   └── idf_component.yml      # ESP-IDF 组件依赖（esp32-camera）
 ├── server/                    # 服务端代码
 │   ├── app.py                 # Flask 应用主程序
 │   ├── requirements.txt       # Python 依赖
+│   ├── test_week6.py          # 第 6 周功能自动化测试
+│   ├── test_week7.py          # 第 7 周功能自动化测试
+│   ├── images/                # 采集到的环境图像（运行时生成）
 │   └── templates/
 │       └── index.html         # Web 前端页面
+├── partitions.csv             # 8MB Flash 分区表（factory 3MB）
 ├── CMakeLists.txt             # ESP-IDF 项目配置
 ├── sdkconfig.defaults         # ESP-IDF 默认配置
 ├── .gitignore                 # Git 忽略文件
@@ -184,6 +198,41 @@ esp32-imu/
   "latest_record": "2024-01-01 12:00:00"
 }
 ```
+
+### 环境图像按需采集（第 7 周）
+
+前端点击「采集一张」后，服务端创建一条图像任务（状态 `pending`），ESP32 轮询到任务后拍照并回传 JPEG。相关接口：
+
+**POST** `/api/image`
+创建一条图像采集任务（默认 `source=device`）。
+```json
+{ "source": "device" }
+```
+响应：
+```json
+{ "request_id": "xxxx", "status": "pending", "source": "device" }
+```
+
+**GET** `/api/collect/pending`
+ESP32 轮询待处理任务；图像任务会携带 `type=image`、`sensor=camera`。
+
+**POST** `/api/image/<id>/received`
+ESP32 取到任务后回报已接收（状态 `sent` → `received`）。
+
+**POST** `/api/image/<id>/data`（raw JPEG body）
+ESP32 上传 JPEG 图像，需携带 `X-Capture-Ts` 头（设备微秒时间戳）；服务端校验 JPEG 头 `\xff\xd8`。成功后状态置为 `captured`。
+
+**POST** `/api/image/<id>/fail`
+采集失败回报，body：`{ "reason": "blocked" | "error" }`。
+
+**GET** `/api/image/<id>`
+查询任务状态与元数据（status、captured_at、device_ts_us、size_bytes 等）。
+
+**GET** `/api/image/<id>/file`
+下载该任务对应的 JPEG 文件。
+
+**GET** `/api/images`
+列出全部图像任务（保留最近 10 张，超出自动清理旧文件）。
 
 ## 排错指南
 

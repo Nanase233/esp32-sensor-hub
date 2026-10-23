@@ -21,6 +21,7 @@
 #include "http_uploader.h"
 #include "command_handler.h"
 #include "button_handler.h"
+#include "image_capture.h"
 
 static const char *TAG = "MAIN";
 
@@ -71,6 +72,12 @@ void app_main(void)
     ESP_LOGI(TAG, "开始数据采集...");
 
     while (1) {
+        /* 图像采集期间 I2C 总线被摄像头占用，暂停 IMU 采样（第 7 周） */
+        if (image_capture_is_busy()) {
+            vTaskDelay(pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
+            continue;
+        }
+
         ret = qma7981_read_accel(&accel);
         if (ret == ESP_OK) {
             /* 获取微秒级时间戳 */

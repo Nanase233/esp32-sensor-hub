@@ -3,6 +3,9 @@ build/
 sdkconfig
 sdkconfig.old
 
+# ESP-IDF 组件缓存（由 idf_component.yml 拉取，无需入库）
+managed_components/
+
 # Python
 __pycache__/
 *.py[cod]

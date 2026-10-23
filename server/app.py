@@ -14,7 +14,7 @@ IMU 数据接收服务器
 访问：http://localhost:5000
 """
 
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, send_file
 from flask_cors import CORS
 from datetime import datetime
 import sqlite3
@@ -33,17 +33,10 @@ CORS(app)  # 允许跨域请求
 
 # ==================== 日志配置（第 6 周任务） ====================
 # 交互日志文件，记录每个请求的生命周期
+# 注意：request_id 通过 logger.info(..., extra={"request_id": ...}) 逐条传入。
+# 不要用 addFilter(RequestIdFilter(...)) —— 过滤器会累积且互相覆盖，
+# 并发时会把 A 请求的日志错标成 B 的 request_id。
 LOG_FILE = os.path.join(os.path.dirname(__file__), "interaction.log")
-
-class RequestIdFilter(logging.Filter):
-    """为日志记录添加 request_id 字段"""
-    def __init__(self, request_id):
-        super().__init__()
-        self.request_id = request_id
-
-    def filter(self, record):
-        record.request_id = self.request_id
-        return True
 
 # 使用独立 logger，不修改 root logger，避免影响 Flask/Werkzeug 日志
 logger = logging.getLogger("interaction")
@@ -102,11 +95,12 @@ def call_llm(user_text: str) -> dict:
 
     system_prompt = (
         "你是一个传感器数据采集系统的意图识别助手。"
-        "用户的输入会被映射为以下四种意图之一：\n"
+        "用户的输入会被映射为以下五种意图之一：\n"
         "1. query_last - 查看上次/最近/历史数据（如：'查看上次数据'、'最近一次采集结果'、'上次加速度是多少'）\n"
         "2. collect_new - 请求重新采集一次新数据（如：'重新采集一次'、'再采一次'、'现在采集'）\n"
-        "3. ambiguous - 输入模糊，无法确定是查看还是采集（如：'看看数据'、'帮我查一下'）\n"
-        "4. out_of_scope - 与数据采集无关的请求（如：'今天天气如何'、'讲个笑话'）\n\n"
+        "3. capture_image - 请求拍摄/查看环境图像（如：'看看周围环境'、'拍一张照片'、'现在画面是什么'）\n"
+        "4. ambiguous - 输入模糊，无法确定是查看、采集还是拍照（如：'看看数据'、'帮我查一下'）\n"
+        "5. out_of_scope - 与数据采集无关的请求（如：'今天天气如何'、'讲个笑话'）\n\n"
         "请严格按以下 JSON 格式返回，不要添加任何其他内容：\n"
         '{"intent": "...", "device_id": "esp32-s3-eye", "sensor": "imu", "reasoning": "..."}\n'
         "device_id 和 sensor 仅在明确提及时填写，否则为 null。"
@@ -160,11 +154,22 @@ def classify_intent_by_rules(user_text: str) -> dict:
     query_keywords = ["上次", "最近", "历史", "上一次", "之前的", "刚才", "刚才的",
                       "查看数据", "看看数据", "查一下", "上次数据", "最近一次",
                       "加速度", "数据是多少", "结果"]
+    # 图像采集意图关键词（第 7 周新增）
+    image_keywords = ["拍一张", "拍个照", "拍照", "照相", "看看周围", "周围环境",
+                      "环境图像", "画面", "图像", "看一下环境", "看看环境"]
 
     is_collect = any(kw in text for kw in collect_keywords)
     is_query = any(kw in text for kw in query_keywords)
+    is_image = any(kw in text for kw in image_keywords)
 
-    if is_collect and not is_query:
+    if is_image and not is_collect:
+        return {
+            "intent": "capture_image",
+            "device_id": "esp32-s3-eye",
+            "sensor": None,
+            "reasoning": "规则匹配：检测到图像采集关键词"
+        }
+    elif is_collect and not is_query:
         return {
             "intent": "collect_new",
             "device_id": "esp32-s3-eye",
@@ -200,7 +205,8 @@ def classify_intent(user_text: str) -> dict:
     意图识别入口：优先调用 LLM，失败时回退到规则匹配。
     """
     result = call_llm(user_text)
-    if result and result.get("intent") in ("query_last", "collect_new", "ambiguous", "out_of_scope"):
+    if result and result.get("intent") in ("query_last", "collect_new", "capture_image",
+                                           "ambiguous", "out_of_scope"):
         result["source"] = "llm"
         return result
     # 回退到规则匹配
@@ -220,6 +226,18 @@ _prev_ts = 0.0
 
 # 任务超时时间（秒）
 TASK_TIMEOUT_S = 30
+
+# ==================== 图像采集配置（第 7 周任务） ====================
+# 图像文件保存目录
+IMAGE_DIR = os.path.join(os.path.dirname(__file__), "images")
+# 最少保留：只保留最近 N 张图像文件，更早的文件在入库后清理（记录仍保留用于审计）
+IMAGE_KEEP_COUNT = 10
+# 图像任务超时时间（秒）
+IMAGE_TIMEOUT_S = 30
+# 允许的设备与图像来源
+IMAGE_SOURCES = {"device", "replay"}   # device=真机采集，replay=授权历史图像回放
+
+os.makedirs(IMAGE_DIR, exist_ok=True)
 
 
 def init_db():
@@ -278,6 +296,26 @@ def init_db():
     """)
     c.execute("""
         CREATE INDEX IF NOT EXISTS idx_help_status ON help_requests(status)
+    """)
+
+    # 图像采集记录表（第 7 周任务）
+    # 一条记录 = 一次按需取图请求，关联请求 ID、图像文件与采集时间
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS image_records (
+            request_id TEXT PRIMARY KEY,
+            device_id TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            source TEXT NOT NULL DEFAULT 'device',
+            file_path TEXT,
+            size_bytes INTEGER,
+            device_ts_us INTEGER,
+            captured_at REAL,
+            error_msg TEXT,
+            created_at REAL NOT NULL
+        )
+    """)
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_image_status ON image_records(status)
     """)
 
     conn.commit()
@@ -515,9 +553,38 @@ def get_task_status(request_id):
 
 @app.route("/api/collect/pending", methods=["GET"])
 def get_pending_task():
-    """ESP32 轮询待执行命令（返回最新的 pending 任务并标记为 sent）"""
+    """ESP32 轮询待执行命令（返回最新的 pending 任务并标记为 sent）
+
+    第 7 周扩展：图像采集任务优先返回，响应中带 type 字段区分任务类型：
+      type=image -> 按需图像采集（sensor=camera）
+      type=imu   -> IMU 数据采集（原有逻辑）
+    """
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+
+    # 1. 先检查待执行的图像采集任务（仅 device 来源由设备执行，replay 仅用于回放演示）
+    c.execute("""
+        SELECT request_id, device_id, created_at
+        FROM image_records
+        WHERE status='pending' AND source='device'
+        ORDER BY created_at ASC
+        LIMIT 1
+    """)
+    img_row = c.fetchone()
+
+    if img_row:
+        c.execute("UPDATE image_records SET status='sent' WHERE request_id=?", (img_row[0],))
+        conn.commit()
+        conn.close()
+        return jsonify({
+            "request_id": img_row[0],
+            "device_id": img_row[1],
+            "sensor": "camera",
+            "type": "image",
+            "created_at": img_row[2]
+        })
+
+    # 2. 再检查 IMU 采集任务
     c.execute("""
         SELECT request_id, device_id, sensor, created_at
         FROM collection_tasks
@@ -536,6 +603,7 @@ def get_pending_task():
             "request_id": row[0],
             "device_id": row[1],
             "sensor": row[2],
+            "type": "imu",
             "created_at": row[3]
         })
     else:
@@ -743,6 +811,307 @@ def get_all_help_requests():
     return jsonify({"help_requests": help_list, "count": len(help_list)})
 
 
+# ==================== 按需图像采集 API（第 7 周任务） ====================
+
+def _purge_old_images(keep=IMAGE_KEEP_COUNT):
+    """
+    最少保留策略：只保留最近 keep 张图像文件。
+
+    记录本身不删除（失败记录与审计需要），仅清理文件并置空 file_path。
+    """
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        SELECT request_id, file_path
+        FROM image_records
+        WHERE file_path IS NOT NULL
+        ORDER BY created_at DESC
+    """)
+    rows = c.fetchall()
+
+    purged = 0
+    for request_id, file_path in rows[keep:]:
+        try:
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
+                purged += 1
+        except OSError:
+            pass
+        c.execute("""
+            UPDATE image_records
+            SET file_path=NULL,
+                error_msg=COALESCE(error_msg || ' ', '') || 'file purged by retention'
+            WHERE request_id=?
+        """, (request_id,))
+
+    conn.commit()
+    conn.close()
+    if purged:
+        print(f"[IMAGE] 保留策略清理了 {purged} 个旧文件（仅保留最近 {keep} 张）")
+
+
+def _image_mark_timeout(c, request_id):
+    """将超时未完成的图像任务标记为 timeout"""
+    c.execute("SELECT status, created_at FROM image_records WHERE request_id=?", (request_id,))
+    row = c.fetchone()
+    if row and row[0] in ("pending", "sent", "received") and (time.time() - row[1]) > IMAGE_TIMEOUT_S:
+        c.execute("UPDATE image_records SET status='timeout' WHERE request_id=?", (request_id,))
+        return "timeout"
+    return row[0] if row else None
+
+
+def _image_dict(row):
+    """把图像记录行转成响应结构"""
+    return {
+        "request_id": row[0],
+        "device_id": row[1],
+        "status": row[2],
+        "source": row[3],
+        "size_bytes": row[5],
+        "device_ts_us": row[6],
+        "captured_at": row[7],
+        "captured_at_text": (datetime.fromtimestamp(row[7]).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                            if row[7] else None),
+        "error_msg": row[8],
+        "created_at": row[9],
+        "file_url": f"/api/image/{row[0]}/file" if row[4] else None,
+    }
+
+
+def create_image_task(device_id="esp32-s3-eye", source="device"):
+    """
+    创建一个按需图像采集任务。
+
+    这是唯一的取图入口：只有本函数被调用（用户请求/教学事件）才会产生采集任务，
+    设备端不做任何主动拍照。
+    """
+    request_id = str(uuid.uuid4())[:8]
+    now = time.time()
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO image_records (request_id, device_id, status, source, created_at)
+        VALUES (?, ?, 'pending', ?, ?)
+    """, (request_id, device_id, source, now))
+    conn.commit()
+    conn.close()
+
+    logger.info(f"创建图像采集任务: {request_id}", extra={"request_id": request_id})
+    return request_id, now
+
+
+@app.route("/api/image", methods=["POST"])
+def create_image():
+    """
+    创建按需图像采集任务。
+
+    请求体：{"device_id": "esp32-s3-eye", "source": "device"|"replay"}
+    返回：{"request_id", "status": "pending", "created_at"}
+    """
+    data = request.get_json() or {}
+    device_id = data.get("device_id", "esp32-s3-eye")
+    source = data.get("source", "device")
+
+    if device_id not in VALID_DEVICES:
+        return jsonify({"error": f"设备 '{device_id}' 不在可用范围内"}), 400
+    if source not in IMAGE_SOURCES:
+        return jsonify({"error": f"图像来源 '{source}' 不合法"}), 400
+
+    request_id, now = create_image_task(device_id, source)
+    return jsonify({
+        "request_id": request_id,
+        "status": "pending",
+        "source": source,
+        "created_at": now
+    }), 201
+
+
+@app.route("/api/image/<request_id>/received", methods=["POST"])
+def image_received(request_id):
+    """确认已接收图像任务（状态 sent -> received，前端显示'采集中'）
+
+    source=replay 的任务（授权历史图像回放）不走设备轮询，
+    允许由回放脚本从 pending 直接置为 received。
+    """
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        UPDATE image_records SET status='received'
+        WHERE request_id=?
+          AND (status='sent' OR (status='pending' AND source='replay'))
+    """, (request_id,))
+    conn.commit()
+    rowcount = c.rowcount
+    conn.close()
+
+    if rowcount == 0:
+        return jsonify({"error": "任务状态不正确或不存在"}), 404
+    logger.info("设备已接收图像任务", extra={"request_id": request_id})
+    return jsonify({"status": "received"})
+
+
+@app.route("/api/image/<request_id>/data", methods=["POST"])
+def image_upload(request_id):
+    """
+    接收设备上传的 JPEG 图像。
+
+    安全约束（当堂验证重点）：
+      只有本任务处于 sent/received 状态时才接受数据，
+      绝不复用或引用上一张图像，保证"上次成功图像不会被标为本次采集成功"。
+    """
+    image_bytes = request.get_data()
+    if not image_bytes:
+        return jsonify({"error": "空图像数据"}), 400
+    if len(image_bytes) < 128 or not image_bytes.startswith(b"\xff\xd8"):
+        return jsonify({"error": "不是有效的 JPEG 数据"}), 400
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT status FROM image_records WHERE request_id=?", (request_id,))
+    row = c.fetchone()
+
+    if not row:
+        conn.close()
+        return jsonify({"error": "任务不存在"}), 404
+
+    status = _image_mark_timeout(c, request_id)
+    if status not in ("sent", "received"):
+        conn.commit()
+        conn.close()
+        return jsonify({"error": f"任务状态为 {status}，不接受图像"}), 409
+
+    # 保存文件：文件名与 request_id 一一对应
+    file_path = os.path.join(IMAGE_DIR, f"{request_id}.jpg")
+    with open(file_path, "wb") as f:
+        f.write(image_bytes)
+
+    # 设备侧采集时间（微秒，开机计时，仅作参考）
+    device_ts_us = request.headers.get("X-Capture-Ts")
+    try:
+        device_ts_us = int(device_ts_us) if device_ts_us else None
+    except ValueError:
+        device_ts_us = None
+
+    captured_at = time.time()
+    c.execute("""
+        UPDATE image_records
+        SET status='captured', file_path=?, size_bytes=?, device_ts_us=?,
+            captured_at=?, error_msg=NULL
+        WHERE request_id=?
+    """, (file_path, len(image_bytes), device_ts_us, captured_at, request_id))
+    conn.commit()
+    conn.close()
+
+    _purge_old_images()
+
+    logger.info(f"图像入库: {len(image_bytes)} 字节", extra={"request_id": request_id})
+    return jsonify({
+        "status": "captured",
+        "request_id": request_id,
+        "size_bytes": len(image_bytes),
+        "captured_at": captured_at
+    }), 201
+
+
+@app.route("/api/image/<request_id>/fail", methods=["POST"])
+def image_fail(request_id):
+    """
+    设备上报采集失败。
+
+    请求体：{"reason": "blocked"|"error", "error": "描述"}
+    reason=blocked 表示镜头遮挡/画面不可用，其余归为 failed。
+    """
+    data = request.get_json() or {}
+    reason = data.get("reason", "error")
+    error_msg = data.get("error", "未知错误")
+
+    status = "blocked" if reason == "blocked" else "failed"
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        UPDATE image_records
+        SET status=?, error_msg=?
+        WHERE request_id=? AND status IN ('sent','received')
+    """, (status, error_msg, request_id))
+    conn.commit()
+    rowcount = c.rowcount
+    conn.close()
+
+    if rowcount == 0:
+        return jsonify({"error": "任务状态不正确或不存在"}), 404
+
+    logger.warning(f"图像采集失败: {status} - {error_msg}", extra={"request_id": request_id})
+    return jsonify({"status": status, "request_id": request_id})
+
+
+@app.route("/api/image/<request_id>", methods=["GET"])
+def get_image_status(request_id):
+    """
+    查询单次图像采集任务的状态与结果。
+
+    注意力：只返回本任务自己的图像，任务未成功时 file_url 为 null，
+    不会回退到上一张成功图像。
+    """
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    _image_mark_timeout(c, request_id)
+    conn.commit()
+
+    c.execute("""
+        SELECT request_id, device_id, status, source, file_path,
+               size_bytes, device_ts_us, captured_at, error_msg, created_at
+        FROM image_records WHERE request_id=?
+    """, (request_id,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+        return jsonify({"error": "任务不存在"}), 404
+
+    return jsonify(_image_dict(row))
+
+
+@app.route("/api/image/<request_id>/file", methods=["GET"])
+def get_image_file(request_id):
+    """返回图像文件；任务未成功或无文件时返回 404"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT file_path, status FROM image_records WHERE request_id=?", (request_id,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row or not row[0] or row[1] != "captured":
+        return jsonify({"error": "该任务没有可用图像"}), 404
+    if not os.path.exists(row[0]):
+        return jsonify({"error": "图像文件已被清理"}), 404
+
+    return send_file(row[0], mimetype="image/jpeg")
+
+
+@app.route("/api/images", methods=["GET"])
+def get_images():
+    """获取最近的图像采集记录列表"""
+    limit = request.args.get("limit", IMAGE_KEEP_COUNT, type=int)
+    limit = min(limit, 100)
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        SELECT request_id, device_id, status, source, file_path,
+               size_bytes, device_ts_us, captured_at, error_msg, created_at
+        FROM image_records
+        ORDER BY created_at DESC
+        LIMIT ?
+    """, (limit,))
+    rows = c.fetchall()
+    conn.close()
+
+    images = [_image_dict(r) for r in rows]
+    return jsonify({"images": images, "count": len(images), "keep_count": IMAGE_KEEP_COUNT})
+
+
 # ==================== 自然语言查询 API（第 4 周任务） ====================
 
 # 合法设备列表（校验设备范围）
@@ -856,20 +1225,85 @@ def collect_new_data(device_id: str, sensor: str) -> dict:
                     "az": row[3],
                     "timestamp": row[4],
                 },
-                "request_id": request_id,
+                # 注意：键名不能叫 request_id，否则会在 nl_query 响应中
+                # 覆盖用户会话的 request_id，导致前端误判为迟到结果而丢弃
+                "collect_task_id": request_id,
             }
         elif status in ("failed", "timeout"):
             return {
                 "success": False,
                 "message": f"采集任务{status}，设备未能完成数据采集。",
                 "source": "device",
-                "request_id": request_id,
+                "collect_task_id": request_id,
             }
 
     # 超时
     return {
         "success": False,
         "message": "等待设备响应超时（30秒），设备可能离线或无响应。",
+        "source": "timeout",
+        "collect_task_id": request_id,
+    }
+
+
+def capture_image_and_wait(device_id=None, wait_s=None) -> dict:
+    """
+    工具：请求设备按需拍摄一张环境图像，并等待采集结果。
+
+    回复中必须明确「是否成功」与「采集时刻」，不臆测成功。
+    """
+    device_id = device_id or "esp32-s3-eye"
+    if device_id not in VALID_DEVICES:
+        return {
+            "success": False,
+            "message": f"设备 '{device_id}' 不在可用范围内。",
+            "source": "device",
+        }
+
+    request_id, _ = create_image_task(device_id, "device")
+    deadline = time.time() + (wait_s or IMAGE_TIMEOUT_S)
+
+    while time.time() < deadline:
+        time.sleep(0.5)
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        _image_mark_timeout(c, request_id)
+        conn.commit()
+        c.execute("SELECT status, captured_at, size_bytes, error_msg FROM image_records WHERE request_id=?",
+                  (request_id,))
+        row = c.fetchone()
+        conn.close()
+
+        if not row:
+            continue
+
+        status, captured_at, size_bytes, error_msg = row
+        if status == "captured":
+            return {
+                "success": True,
+                "message": f"已拍摄环境图像，采集时间 {datetime.fromtimestamp(captured_at).strftime('%H:%M:%S')}，"
+                           f"图像大小 {size_bytes} 字节。",
+                "source": "device",
+                "request_id": request_id,
+                "captured_at": captured_at,
+                "image_url": f"/api/image/{request_id}/file",
+            }
+        if status in ("blocked", "failed", "timeout"):
+            reason_map = {
+                "blocked": "镜头遮挡或画面不可用",
+                "failed": "采集失败",
+                "timeout": "设备响应超时，未完成取图",
+            }
+            return {
+                "success": False,
+                "message": f"{reason_map[status]}（{error_msg or status}），本次没有取得可用的新图像。",
+                "source": "device",
+                "request_id": request_id,
+            }
+
+    return {
+        "success": False,
+        "message": "等待设备取图超时，本次没有取得新图像。",
         "source": "timeout",
         "request_id": request_id,
     }
@@ -890,24 +1324,20 @@ def nl_query():
     user_text = data.get("text", "").strip()
     request_id = data.get("request_id") or str(uuid.uuid4())[:8]
 
-    # 设置日志过滤器
-    req_logger = logging.getLogger("interaction")
-    req_logger.addFilter(RequestIdFilter(request_id))
-
     if not user_text:
         return jsonify({"error": "请输入查询内容"}), 400
 
     # 检查是否已被取消
     if request_id in cancelled_requests:
         cancelled_requests.discard(request_id)
-        req_logger.info(f"请求已取消：{user_text}")
+        logger.info(f"请求已取消：{user_text}", extra={"request_id": request_id})
         return jsonify({
             "request_id": request_id,
             "status": "cancelled",
             "message": "任务已取消"
         }), 200
 
-    req_logger.info(f"开始处理：{user_text}")
+    logger.info(f"开始处理：{user_text}", extra={"request_id": request_id})
 
     # 1. 意图识别（LLM 优先，规则回退）
     intent_result = classify_intent(user_text)
@@ -924,6 +1354,8 @@ def nl_query():
             intent_result.get("device_id"),
             intent_result.get("sensor")
         )
+    elif intent == "capture_image":
+        tool_result = capture_image_and_wait(intent_result.get("device_id"))
     elif intent == "ambiguous":
         tool_result = {
             "success": False,
@@ -938,7 +1370,8 @@ def nl_query():
         }
 
     processing_time_ms = (time.time() - start_time) * 1000
-    req_logger.info(f"完成处理：intent={intent}, time={processing_time_ms:.0f}ms")
+    logger.info(f"完成处理：intent={intent}, time={processing_time_ms:.0f}ms",
+                extra={"request_id": request_id})
 
     return jsonify({
         "request_id": request_id,
@@ -967,7 +1400,7 @@ def cancel_task():
         return jsonify({"error": "缺少 request_id"}), 400
 
     cancelled_requests.add(request_id)
-    logger.info(f"任务已取消：{request_id}")
+    logger.info(f"任务已取消：{request_id}", extra={"request_id": request_id})
 
     return jsonify({"status": "cancelled", "request_id": request_id})
 
@@ -1197,16 +1630,18 @@ def voice_query():
         tool_result = query_last_data(intent_result.get("device_id"), intent_result.get("sensor"))
     elif intent == "collect_new":
         tool_result = collect_new_data(intent_result.get("device_id"), intent_result.get("sensor"))
+    elif intent == "capture_image":
+        tool_result = capture_image_and_wait(intent_result.get("device_id"))
     elif intent == "ambiguous":
         tool_result = {
             "success": False,
-            "message": "您的请求不够明确。请说明是'查看上次数据'还是'重新采集一次'？",
+            "message": "您的请求不够明确。请说明是'查看上次数据'、'重新采集一次'还是'拍一张环境图像'？",
             "source": "intent_classifier",
         }
     else:
         tool_result = {
             "success": False,
-            "message": "抱歉，我只能处理传感器数据查询和采集相关的请求。",
+            "message": "抱歉，我只能处理传感器数据查询、采集和环境取图相关的请求。",
             "source": "intent_classifier",
         }
 

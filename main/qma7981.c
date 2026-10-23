@@ -270,3 +270,26 @@ esp_err_t qma7981_read_chip_id(uint8_t *chip_id)
     }
     return qma7981_read_reg(QMA7981_REG_CHIP_ID, chip_id);
 }
+
+esp_err_t qma7981_bus_deinit(void)
+{
+    /* 等待可能正在进行的读写事务结束，再释放总线 */
+    if (s_i2c_mutex != NULL) {
+        xSemaphoreTake(s_i2c_mutex, pdMS_TO_TICKS(1000));
+    }
+
+    esp_err_t ret = i2c_driver_delete(I2C_PORT_NUM);
+
+    if (s_i2c_mutex != NULL) {
+        xSemaphoreGive(s_i2c_mutex);
+    }
+
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "I2C 驱动释放失败: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "I2C 总线已释放（SDA=GPIO%d, SCL=GPIO%d）",
+             QMA7981_I2C_SDA_GPIO, QMA7981_I2C_SCL_GPIO);
+    return ESP_OK;
+}

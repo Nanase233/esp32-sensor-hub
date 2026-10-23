@@ -74,4 +74,14 @@ esp_err_t qma7981_read_accel(qma7981_data_t *data);
  */
 esp_err_t qma7981_read_chip_id(uint8_t *chip_id);
 
+/**
+ * 释放 I2C 总线（第 7 周新增）
+ *
+ * IMU 与摄像头 SCCB 共用 GPIO4/5，摄像头抓图期间需独占总线。
+ * 调用本函数后 IMU 读写会失败，需通过 qma7981_init() 恢复。
+ *
+ * @return ESP_OK 成功
+ */
+esp_err_t qma7981_bus_deinit(void);
+
 #endif /* QMA7981_H */

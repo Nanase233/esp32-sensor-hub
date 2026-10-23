@@ -6,12 +6,17 @@
  *   2. 收到 request_id 后标记 received（POST /api/collect/<id>/received）
  *   3. 执行一次 IMU 采集，携带 request_id 上传
  *   4. 上传失败则上报失败（POST /api/collect/<id>/fail）
+ *
+ * 第 7 周扩展：
+ *   轮询结果带 type 字段，type=image 时转交按需图像采集模块，
+ *   type=imu（默认）走原有 IMU 采集流程。
  */
 
 #include "command_handler.h"
 #include "wifi_manager.h"
 #include "http_uploader.h"
 #include "qma7981.h"
+#include "image_capture.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "cJSON.h"
@@ -21,9 +26,6 @@
 #include <string.h>
 
 static const char *TAG = "CMD";
-
-/* 服务器基础 URL（不含 /api/imu 路径） */
-#define SERVER_BASE_URL  "http://10.1.41.179:5000"
 
 /* HTTP 响应缓冲区大小 */
 #define HTTP_RESP_BUF_SIZE  512
@@ -145,15 +147,24 @@ static esp_err_t http_post(const char *url, const char *json_body)
 /**
  * 轮询待执行命令
  *
+ * @param request_id 输出：任务 ID
+ * @param id_size 缓冲区大小
+ * @param task_type 输出：任务类型（"imu" / "image"）
+ * @param type_size 类型缓冲区大小
  * @return ESP_OK 且 *request_id 非空表示收到命令
  */
-static esp_err_t poll_pending_command(char *request_id, size_t id_size)
+static esp_err_t poll_pending_command(char *request_id, size_t id_size,
+                                      char *task_type, size_t type_size)
 {
     char url[128];
     snprintf(url, sizeof(url), "%s/api/collect/pending", SERVER_BASE_URL);
 
     char resp_buf[HTTP_RESP_BUF_SIZE];
     int read_len = http_get(url, resp_buf, sizeof(resp_buf));
+
+    /* 默认按 IMU 任务处理，保持与原接口兼容 */
+    strncpy(task_type, "imu", type_size - 1);
+    task_type[type_size - 1] = '\0';
 
     if (read_len <= 0) {
         request_id[0] = '\0';
@@ -171,6 +182,14 @@ static esp_err_t poll_pending_command(char *request_id, size_t id_size)
     if (rid && cJSON_IsString(rid) && rid->valuestring && rid->valuestring[0] != '\0') {
         strncpy(request_id, rid->valuestring, id_size - 1);
         request_id[id_size - 1] = '\0';
+
+        /* 读取任务类型（服务端第 7 周新增字段） */
+        cJSON *type = cJSON_GetObjectItem(root, "type");
+        if (type && cJSON_IsString(type) && type->valuestring) {
+            strncpy(task_type, type->valuestring, type_size - 1);
+            task_type[type_size - 1] = '\0';
+        }
+
         cJSON_Delete(root);
         return ESP_OK;
     }
@@ -257,11 +276,20 @@ void command_handler_task(void *pvParameters)
         /* 仅在 WiFi 连接时轮询 */
         if (wifi_manager_is_connected()) {
             char request_id[16] = {0};
+            char task_type[12] = {0};
 
-            esp_err_t err = poll_pending_command(request_id, sizeof(request_id));
+            esp_err_t err = poll_pending_command(request_id, sizeof(request_id),
+                                                 task_type, sizeof(task_type));
             if (err == ESP_OK && request_id[0] != '\0') {
-                ESP_LOGI(TAG, "收到采集命令: %s", request_id);
-                execute_collect_command(request_id);
+                if (strcmp(task_type, "image") == 0) {
+                    /* 第 7 周：按需图像采集任务 */
+                    ESP_LOGI(TAG, "收到图像采集命令: %s", request_id);
+                    image_capture_run(request_id);
+                } else {
+                    /* 第 2 周：IMU 采集任务 */
+                    ESP_LOGI(TAG, "收到采集命令: %s", request_id);
+                    execute_collect_command(request_id);
+                }
             }
 
             /* 每 15 次轮询输出一次心跳日志 */

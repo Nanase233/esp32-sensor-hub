@@ -406,6 +406,22 @@
 
         .nl-input-row button { white-space: nowrap; }
 
+        /* ===== 第 7 周：环境图像面板 ===== */
+        .image-panel { display: flex; flex-direction: column; gap: 10px; }
+        .image-actions { display: flex; align-items: center; gap: 12px; }
+        .image-status { color: #94a3b8; font-size: 13px; }
+        .image-frame {
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            border-radius: 10px;
+            min-height: 180px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .image-frame img { max-width: 100%; display: block; }
+
         .nl-examples { display: flex; flex-wrap: wrap; gap: 6px; }
 
         .nl-examples button {
@@ -739,7 +755,7 @@
                     <!-- 语音输入（第 5/6 周任务：澄清与停止） -->
                     <div class="voice-section">
                         <button class="voice-btn" id="voice-btn" title="点击开始语音识别">🎙️</button>
-                        <button class="stop-btn" id="stop-audio-btn" title="停止播放">️</button>
+                        <button class="stop-btn" id="stop-audio-btn" title="停止播放">⏹️</button>
                         <div class="voice-status" id="voice-status">
                             <span>点击麦克风开始语音输入</span>
                         </div>
@@ -752,6 +768,20 @@
                 <div class="card-title"><span class="icon">🆘</span> 求助请求</div>
                 <div id="help-list">
                     <div class="empty-text">暂无求助请求</div>
+                </div>
+            </div>
+
+            <!-- 环境图像（第 7 周任务：按需采集） -->
+            <div class="card nl-full">
+                <div class="card-title"><span class="icon">📷</span> 环境图像（按需采集）</div>
+                <div class="image-panel">
+                    <div class="image-actions">
+                        <button class="btn-primary" id="capture-image-btn" onclick="captureImage()">拍一张</button>
+                        <span class="image-status" id="image-status">尚未采集</span>
+                    </div>
+                    <div class="image-frame" id="image-frame">
+                        <span class="empty-text">点击"拍一张"获取当前环境图像</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1169,6 +1199,64 @@
         // 自然语言助手
         function quickNl(text) { document.getElementById('nl-input').value = text; sendNlQuery(); }
 
+        // ==================== 环境图像按需采集（第 7 周任务） ====================
+        // 触发条件：用户点击"拍一张"或语音请求环境图像
+        // 停止条件：任务进入 captured/blocked/failed/timeout 即停止轮询
+        async function captureImage() {
+            const btn = document.getElementById('capture-image-btn');
+            const statusEl = document.getElementById('image-status');
+            const frame = document.getElementById('image-frame');
+
+            btn.disabled = true;
+            statusEl.textContent = '已发送采集请求，等待设备...';
+            frame.innerHTML = '<span class="empty-text">采集中...</span>';
+
+            try {
+                const resp = await fetch('/api/image', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({device_id: 'esp32-s3-eye', source: 'device'})
+                });
+                const task = await resp.json();
+                if (!resp.ok) throw new Error(task.error || '创建任务失败');
+
+                // 轮询任务状态，最长 30 秒
+                const deadline = Date.now() + 30000;
+                let result = null;
+                while (Date.now() < deadline) {
+                    await new Promise(r => setTimeout(r, 700));
+                    const r2 = await fetch(`/api/image/${task.request_id}`);
+                    result = await r2.json();
+                    if (['captured', 'blocked', 'failed', 'timeout'].includes(result.status)) break;
+                    if (result.status === 'received') statusEl.textContent = '设备采集中...';
+                }
+                if (!result) throw new Error('查询任务状态超时');
+
+                const statusMap = {
+                    blocked: '镜头遮挡/画面不可用',
+                    failed: '采集失败',
+                    timeout: '设备响应超时',
+                    pending: '设备未响应',
+                    sent: '设备未响应',
+                    received: '设备未完成'
+                };
+
+                if (result.status === 'captured') {
+                    statusEl.textContent = `采集成功 · ${result.captured_at_text} · ${result.size_bytes} 字节 · 请求 ${result.request_id}`;
+                    frame.innerHTML = `<img src="${result.file_url}?t=${Date.now()}" alt="环境图像">`;
+                } else {
+                    const text = statusMap[result.status] || result.status;
+                    statusEl.textContent = `${text} · 请求 ${result.request_id}`;
+                    frame.innerHTML = `<span class="empty-text">${text}</span>`;
+                }
+            } catch (e) {
+                statusEl.textContent = `采集失败：${e.message}`;
+                frame.innerHTML = '<span class="empty-text">未取得图像</span>';
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
         function addNlMessage(text, type, meta) {
             const box = document.getElementById('nl-chat-box');
             const div = document.createElement('div');
@@ -1258,7 +1346,7 @@
                         if (d.created_at) msg += `<br>入库时间: ${d.created_at}`;
                     }
                     const sourceText = {'database':'数据库','device':'设备实时采集','timeout':'超时','intent_classifier':'意图识别'};
-                    const intentText = {'query_last':'查询上次','collect_new':'重新采集','ambiguous':'意图模糊','out_of_scope':'超出范围'};
+                    const intentText = {'query_last':'查询上次','collect_new':'重新采集','capture_image':'环境取图','ambiguous':'意图模糊','out_of_scope':'超出范围'};
                     const perfInfo = result.processing_time_ms ? ` | 处理：${result.processing_time_ms.toFixed(0)}ms` : '';
                     addNlMessage(msg, result.success ? 'assistant' : 'error',
                         `来源: ${sourceText[result.source]||result.source||'未知'} | 意图: ${intentText[result.intent]||result.intent} | ${result.intent_source === 'llm' ? 'LLM' : '规则'}${perfInfo}`);
@@ -1290,7 +1378,6 @@
         // ==================== 语音输入（浏览器内置语音识别 + 第 6 周澄清与停止） ====================
         let speechRecognition = null;
         let isListening = false;
-        let currentAudio = null;
         let pendingVoiceText = null;  // 待确认的语音识别文本
 
         // 设置语音状态显示
@@ -1499,9 +1586,9 @@
                     addNlMessage(msg, result.success ? 'assistant' : 'error',
                         `来源: ${sourceText[result.source]||result.source||'未知'} | 运行: ${result.run_location||'未知'}${perfInfo}`);
 
-                    if (result.audio) {
-                        setVoiceStage('playing', '播放中... (点击停止)');
-                        playAudio(result.audio);
+                    // 语音查询后用浏览器内置 TTS 播报结果
+                    if (result.success && result.message) {
+                        speakText(result.message);
                     } else {
                         setVoiceStage('idle', '点击麦克风开始语音输入');
                     }
@@ -1537,41 +1624,37 @@
             }
         }
 
-        // 播放音频（第 6 周：支持停止）
-        function playAudio(audioB64) {
-            if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+        // 浏览器内置 TTS 播报（第 6 周：支持停止）
+        function speakText(text) {
+            // 先停止之前的播报
+            window.speechSynthesis.cancel();
 
-            const audioData = atob(audioB64);
-            const bytes = new Uint8Array(audioData.length);
-            for (let i = 0; i < audioData.length; i++) bytes[i] = audioData.charCodeAt(i);
-            const blob = new Blob([bytes], { type: 'audio/mpeg' });
-            const url = URL.createObjectURL(blob);
+            // 去除 HTML 标签，只保留纯文本
+            const plainText = text.replace(/<br\s*\/?>/gi, '，').replace(/<[^>]+>/g, '');
 
-            currentAudio = new Audio(url);
-            currentAudio.onended = () => {
+            const utterance = new SpeechSynthesisUtterance(plainText);
+            utterance.lang = 'zh-CN';
+            utterance.rate = 1.0;
+            utterance.pitch = 1.0;
+
+            setVoiceStage('playing', '播放中... (点击停止)');
+
+            utterance.onend = () => {
                 setVoiceStage('idle', '点击麦克风开始语音输入');
-                URL.revokeObjectURL(url);
-                currentAudio = null;
             };
-            currentAudio.onerror = () => {
+            utterance.onerror = () => {
                 setVoiceStage('idle', '点击麦克风开始语音输入');
-                URL.revokeObjectURL(url);
-                currentAudio = null;
             };
-            currentAudio.play().catch(e => {
-                console.error('音频播放失败:', e);
-                setVoiceStage('idle', '点击麦克风开始语音输入');
-                currentAudio = null;
-            });
+
+            window.speechSynthesis.speak(utterance);
         }
 
-        // 停止音频播放（第 6 周：停止播报）
+        // 停止播报（第 6 周：停止播报）
         function stopAudioPlayback() {
-            if (currentAudio) {
-                currentAudio.pause();
-                currentAudio = null;
+            if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+                window.speechSynthesis.cancel();
                 setVoiceStage('idle', '已停止播放');
-                console.log('音频播放已停止');
+                console.log('语音播报已停止');
             }
         }
 
