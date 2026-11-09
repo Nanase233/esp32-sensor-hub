@@ -11,25 +11,31 @@
   返回 (topk, model_version)，二者可互相替换而不改动调用方。
 
 后端选择（环境变量 MODEL_BACKEND）：
-  auto（默认） 有 TEACHER_MODEL_URL 走 HTTP 推理服务；否则用本地 ONNX 模型
+  auto（默认） 学生候选就绪则用学生；否则用教师基线（HTTP 优先，本地 ONNX 兜底）
   teacher      强制教师基线（HTTP 优先，失败回退本地 ONNX）
-  student      学生候选模型（接入位，未就绪时明确返回不可用）
+  student      学生候选；未就绪时回退教师基线，并在结果中如实标注实际模型
 
 诚实性约束（当堂验证重点）：
   - 本地 ONNX 兜底是真实推理，绝不用静态假标签冒充模型输出
-  - 分数是模型内部置信度（未经校准），调用方不得将其表述为现实正确率
+  - 分数是模型输出分数（未经校准），调用方不得将其表述为现实正确率
   - 模型不可用时返回 unavailable，不伪造结果
 """
 
 import io
 import os
 import json
+import math
 import time
 import urllib.request
 import urllib.error
 
 import numpy as np
 from PIL import Image
+
+# ==================== 对外文案（前后端统一口径） ====================
+
+SCORE_NOTE = "分数为模型输出分数（未经校准），不代表现实正确率"
+COARSE_NOTE = "规则粗分类（拓展），不是模型结论，不用于位置或人身安全判断"
 
 # ==================== 路径与模型配置 ====================
 
@@ -60,7 +66,7 @@ USABILITY_NOTES = {
     "blocked": "画面内容过于均匀，疑似镜头被大面积遮挡",
 }
 REJECT_NOTES = {
-    "low_score": "模型置信度不足，无法确定画面内容",
+    "low_score": "模型分数不足，无法确定画面内容",
     "ambiguous": "多个类别得分接近，模型无法区分",
     "decode_failed": "图像文件无法解码，未进行推理",
     "model_unavailable": "视觉模型当前不可用",
@@ -166,6 +172,8 @@ class InferenceResult:
             "rejected_reason": self.rejected_reason,
             "uncertain_note": self.uncertain_note,
             "coarse": self.coarse,
+            "score_note": SCORE_NOTE,
+            "coarse_note": COARSE_NOTE,
         }
 
 
@@ -298,34 +306,71 @@ class LocalOnnxModel(BaseVisionModel):
 class TeacherHttpModel(BaseVisionModel):
     """教师基线 HTTP 推理服务（模型课提供的真实接口）。
 
-    约定：POST image/jpeg，响应 JSON 含 label/score/model_version（或 topk）。
-    请求失败时由 TeacherBaselineModel 回退到本地 ONNX。
+    契约（准备与协同）：
+      POST image/jpeg
+      响应 JSON 含 model_version，以及 topk 或 label/score。
+      score 必须是 0~1 的有限数值，label 不能为空。
+    不符合契约时抛异常，由 TeacherBaselineModel 回退本地 ONNX；
+    两者都不可用则明确返回不可用，绝不伪造结果。
     """
 
     name = "teacher_baseline_http"
     available = True
 
-    def __init__(self, url, timeout=15):
+    def __init__(self, url, timeout=15, api_key=""):
         self._url = url
         self._timeout = timeout
+        self._api_key = api_key or ""
+
+    @staticmethod
+    def _parse_topk(data):
+        """把教师服务响应解析成统一 topk，并做严格契约校验。"""
+        raw = data.get("topk")
+        if isinstance(raw, list) and raw:
+            items = raw
+        else:
+            items = [{"label": data.get("label"), "score": data.get("score")}]
+
+        topk = []
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("教师服务 topk 条目不是对象")
+            label = item.get("label")
+            score = item.get("score")
+            if label is None or str(label).strip() == "":
+                raise ValueError("教师服务返回了空标签")
+            if score is None:
+                raise ValueError("教师服务返回了空分数")
+            try:
+                score = float(score)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("教师服务分数不是数值") from exc
+            if not math.isfinite(score) or score < 0.0 or score > 1.0:
+                raise ValueError("教师服务分数不在 0~1 范围内")
+            topk.append((str(label).strip(), score))
+
+        if not topk:
+            raise ValueError("教师服务未返回有效候选")
+        topk.sort(key=lambda t: t[1], reverse=True)
+        return topk
 
     def infer(self, image: Image.Image):
         buf = io.BytesIO()
         image.save(buf, format="JPEG", quality=90)
+        headers = {"Content-Type": "image/jpeg"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         req = urllib.request.Request(
             self._url, data=buf.getvalue(),
-            headers={"Content-Type": "image/jpeg"}, method="POST",
+            headers=headers, method="POST",
         )
         with urllib.request.urlopen(req, timeout=self._timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
 
-        version = data.get("model_version") or f"teacher-http@{self._url}"
-        if isinstance(data.get("topk"), list) and data["topk"]:
-            topk = [(str(t.get("label")), float(t.get("score", 0.0))) for t in data["topk"]]
-        else:
-            topk = [(str(data.get("label", "")), float(data.get("score", 0.0)))]
-        topk.sort(key=lambda t: t[1], reverse=True)
-        return topk, version
+        version = str(data.get("model_version") or "").strip()
+        if not version:
+            raise ValueError("教师服务未返回 model_version")
+        return self._parse_topk(data), version
 
 
 class TeacherBaselineModel(BaseVisionModel):
@@ -334,9 +379,10 @@ class TeacherBaselineModel(BaseVisionModel):
     name = "teacher_baseline"
     available = True
 
-    def __init__(self, http_url=""):
-        self._http = TeacherHttpModel(http_url) if http_url else None
+    def __init__(self, http_url="", api_key=""):
+        self._http = TeacherHttpModel(http_url, api_key=api_key) if http_url else None
         self._onnx = None
+        self._onnx_error = ""
         try:
             self._onnx = LocalOnnxModel()
         except Exception as e:  # 模型文件缺失或 onnxruntime 未安装
@@ -346,13 +392,15 @@ class TeacherBaselineModel(BaseVisionModel):
         if self._http is not None:
             try:
                 return self._http.infer(image)
-            except Exception:
-                pass  # HTTP 失败回退本地 ONNX
+            except Exception as e:
+                # 保留原因，最终都不可用时一并返回，便于排错
+                self._http_error = str(e)
         if self._onnx is not None:
             return self._onnx.infer(image)
         raise RuntimeError(
             "教师基线不可用：HTTP 推理服务未配置/失败，且本地 ONNX 模型不可用 "
-            f"({getattr(self, '_onnx_error', 'unknown')})"
+            f"(http={getattr(self, '_http_error', 'not-configured')}; "
+            f"onnx={self._onnx_error or 'unknown'})"
         )
 
 
@@ -376,28 +424,45 @@ class StudentModel(BaseVisionModel):
 _model_singleton = None
 
 
+def _teacher_model(teacher_url="", api_key="") -> BaseVisionModel:
+    """构造教师基线：有 HTTP 地址时 HTTP 优先，本地 ONNX 兜底。"""
+    m = TeacherBaselineModel(teacher_url, api_key=api_key)
+    if teacher_url:
+        return m
+    # 未配置 HTTP 地址时，本地 ONNX 作为教师基线兜底；
+    # 本地也不可用才返回明确的不可用状态。
+    if m._onnx is None:
+        return _Unavailable("教师基线不可用：未配置 TEACHER_MODEL_URL，且本地 ONNX 模型不可用")
+    return m
+
+
 def get_model() -> BaseVisionModel:
-    """按 MODEL_BACKEND 选择推理后端（进程内单例，避免重复加载模型）"""
+    """按 MODEL_BACKEND 选择推理后端（进程内单例，避免重复加载模型）。"""
     global _model_singleton
     if _model_singleton is not None:
         return _model_singleton
 
     backend = os.environ.get("MODEL_BACKEND", "auto").lower()
     teacher_url = os.environ.get("TEACHER_MODEL_URL", "").strip()
+    teacher_key = os.environ.get("TEACHER_MODEL_API_KEY", "").strip()
 
     if backend == "student":
-        _model_singleton = StudentModel()
-    elif backend == "teacher" and not teacher_url:
-        # 显式要求教师接口但未配置：不用本地模型冒充"教师接口"
-        m = TeacherBaselineModel("")
-        if m._onnx is None:
-            _model_singleton = _Unavailable("MODEL_BACKEND=teacher 但未配置 TEACHER_MODEL_URL")
+        student = StudentModel()
+        if student.available:
+            _model_singleton = student
         else:
-            _model_singleton = m
-    elif teacher_url:
-        _model_singleton = TeacherBaselineModel(teacher_url)
+            # 备用路径：学生模型未就绪时使用教师真实基线，
+            # 结果中的 model_name/model_version 会如实反映实际后端。
+            _model_singleton = _teacher_model(teacher_url, teacher_key)
+    elif backend == "teacher":
+        _model_singleton = _teacher_model(teacher_url, teacher_key)
     else:
-        _model_singleton = TeacherBaselineModel("")
+        # auto：学生就绪则用学生，否则教师基线
+        student = StudentModel()
+        if student.available:
+            _model_singleton = student
+        else:
+            _model_singleton = _teacher_model(teacher_url, teacher_key)
     return _model_singleton
 
 

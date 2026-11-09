@@ -7,7 +7,7 @@
   3. 已完成的旧任务不会被称为"本次采集成功"
   4. 非 sent/received 状态拒绝接收图像
   5. 镜头遮挡 -> blocked 明确状态
-  6. 最少保留策略：只保留最近 10 张文件
+  6. 最少保留策略：保留最近 30 张文件，纠错样本不清理
 """
 import json
 import time
@@ -141,7 +141,8 @@ for i in range(12):
 st, lst = get("/api/images?limit=20")
 captured = [x for x in lst["images"] if x["status"] == "captured" and x["request_id"] in recent_ids]
 with_file = [x for x in captured if x["file_url"]]
-report("6. 保留策略生效：最近 10 张保留文件，更早的被清理",
-       len(with_file) == 10, f"有文件的任务数={len(with_file)}, keep_count={lst.get('keep_count')}")
+report("6. 保留策略配置为最近 30 张，12 张新图未被误删",
+       len(with_file) == 12 and lst.get("keep_count") == 30,
+       f"有文件的任务数={len(with_file)}, keep_count={lst.get('keep_count')}")
 
 print("\n完成。可通过日志文件 server/interaction.log 按 request_id 核对完整生命周期。")

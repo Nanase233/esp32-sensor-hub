@@ -5,9 +5,14 @@
  *   1. 收到图像任务后先确认接收（状态置为 received，前端可显示"采集中"）
  *   2. 释放 IMU 的 I2C 驱动，让摄像头 SCCB 独占 GPIO4/5
  *   3. 首次使用时初始化摄像头（懒加载）
- *   4. 抓一帧 RGB565 计算平均亮度，判断是否镜头遮挡/画面不可用
+ *   4. 抓一帧 RGB565 计算平均亮度，仅作为排错提示
  *   5. 切换为 JPEG 再抓一帧，携带 request_id 上传服务器
  *   6. 无论成功失败，释放摄像头并恢复 IMU 的 I2C 总线
+ *
+ * 可用性判定边界（第 8 周）：
+ *   暗光、模糊、遮挡等失败画面同样需要作为"输入"上传，
+ *   由服务端 check_usability() 给出结构化拒识原因。
+ *   设备端不再因为画面暗或体积小就提前丢弃图像。
  *
  * 停止条件：一次任务只抓一帧，任务结束立即停止，无后台取流。
  */
@@ -49,8 +54,8 @@ static const char *TAG = "IMAGE";
 /* ---- 采集参数 ---- */
 #define IMAGE_JPEG_QUALITY      12      /* JPEG 质量（数值越小画质越高、体积越大） */
 #define IMAGE_FRAMESIZE         FRAMESIZE_QVGA   /* 320x240，单帧约 10~20KB */
-#define IMAGE_MIN_VALID_JPEG    1024    /* 有效 JPEG 的最小字节数，低于此值视为画面不可用 */
-#define IMAGE_DARK_THRESHOLD    12      /* 平均亮度低于此值判定为镜头遮挡 */
+#define IMAGE_MIN_JPEG_BYTES    128     /* 仅拦截明显不是 JPEG 的残帧 */
+#define IMAGE_DARK_HINT         12      /* 平均亮度低于此值仅记录提示，不作为失败条件 */
 
 /* 摄像头是否已初始化（懒加载标记） */
 static bool s_camera_ready = false;
@@ -284,6 +289,25 @@ static int average_brightness(const uint8_t *buf, size_t pixel_count)
     return (int)(sum / (sampled > 0 ? sampled : 1));
 }
 
+/**
+ * 检查一帧数据是否具备最基本的 JPEG 结构
+ *
+ * 只检查 SOI 和最小长度，不根据体积或亮度判断画面是否可用。
+ * 暗光、均匀、疑似遮挡的合法 JPEG 必须继续上传，
+ * 由服务端完成可用性判定和结构化反馈；解码失败也由服务端记录为错误样例。
+ *
+ * @param buf 帧数据
+ * @param len 数据长度
+ * @return true 结构有效
+ */
+static bool jpeg_frame_valid(const uint8_t *buf, size_t len)
+{
+    if (buf == NULL || len < IMAGE_MIN_JPEG_BYTES) {
+        return false;
+    }
+    return buf[0] == 0xFF && buf[1] == 0xD8;
+}
+
 /* ---- 对外接口 ---- */
 
 bool image_capture_is_busy(void)
@@ -341,7 +365,7 @@ esp_err_t image_capture_run(const char *request_id)
     }
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    /* 5. 抓一帧 RGB565 判断亮度（遮挡/画面不可用） */
+    /* 5. 抓一帧 RGB565 估算亮度，仅作为排错提示 */
     fb = esp_camera_fb_get();
     if (fb == NULL) {
         ESP_LOGE(TAG, "抓帧失败");
@@ -353,14 +377,9 @@ esp_err_t image_capture_run(const char *request_id)
 
     int brightness = average_brightness(fb->buf, fb->len / 2);
     esp_camera_fb_return(fb);
-    ESP_LOGI(TAG, "画面平均亮度: %d", brightness);
-
-    if (brightness < IMAGE_DARK_THRESHOLD) {
-        ESP_LOGW(TAG, "画面过暗，判定为镜头遮挡或画面不可用");
-        report_failure(request_id, "blocked", "lens blocked or image dark");
-        restore_imu_bus();
-        s_busy = false;
-        return ESP_FAIL;
+    ESP_LOGI(TAG, "画面平均亮度提示: %d", brightness);
+    if (brightness < IMAGE_DARK_HINT) {
+        ESP_LOGW(TAG, "画面偏暗，仍上传原图交由服务端判定可用性");
     }
 
     /* 6. 以 JPEG 重新启动摄像头，抓取最终上传帧 */
@@ -387,16 +406,16 @@ esp_err_t image_capture_run(const char *request_id)
         return ESP_FAIL;
     }
 
-    if (fb->len < IMAGE_MIN_VALID_JPEG) {
-        ESP_LOGW(TAG, "JPEG 体积异常（%u 字节），视为画面不可用", (unsigned)fb->len);
+    if (!jpeg_frame_valid(fb->buf, fb->len)) {
+        ESP_LOGW(TAG, "JPEG 结构异常（%u 字节），无法作为有效输入", (unsigned)fb->len);
         esp_camera_fb_return(fb);
-        report_failure(request_id, "blocked", "image unusable");
+        report_failure(request_id, "error", "invalid jpeg frame");
         restore_imu_bus();
         s_busy = false;
         return ESP_FAIL;
     }
 
-    /* 7. 上传，携带采集时间戳 */
+    /* 7. 上传，携带采集时间戳；暗光/遮挡帧同样上传，由服务端给出原因 */
     uint64_t captured_us = esp_timer_get_time();
     err = upload_jpeg(request_id, fb->buf, fb->len, captured_us);
     esp_camera_fb_return(fb);

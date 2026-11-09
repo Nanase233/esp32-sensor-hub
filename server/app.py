@@ -30,7 +30,9 @@ import urllib.error
 import logging
 
 # 视觉推理模块（第 8 周任务）：统一接口，HTTP/ONNX 后端可替换
-from vision import run_inference, HIGH_SCORE_THRESHOLD
+from vision import (run_inference, HIGH_SCORE_THRESHOLD,
+                    LOW_SCORE_THRESHOLD, AMBIGUOUS_MARGIN,
+                    SCORE_NOTE, COARSE_NOTE)
 
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
@@ -234,12 +236,22 @@ TASK_TIMEOUT_S = 30
 # ==================== 图像采集配置（第 7 周任务） ====================
 # 图像文件保存目录
 IMAGE_DIR = os.path.join(os.path.dirname(__file__), "images")
-# 最少保留：只保留最近 N 张图像文件，更早的文件在入库后清理（记录仍保留用于审计）
-IMAGE_KEEP_COUNT = 10
+# 最少保留：保留最近 N 张图像文件；已有人工纠错的图片永不清理
+# （记录本身始终保留，便于审计和“输入—结果—反馈”对应）
+IMAGE_KEEP_COUNT = 30
 # 图像任务超时时间（秒）
 IMAGE_TIMEOUT_S = 30
 # 允许的设备与图像来源
 IMAGE_SOURCES = {"device", "replay"}   # device=真机采集，replay=授权历史图像回放
+
+# 样例对照口径（第 8 周）：四类基础桶 + 误判叠加视图
+BUCKET_NOTES = {
+    "normal": "模型给出结论且未被人工否定；不代表真实正确率",
+    "low_score": "模型完成推理但分数低或候选接近，系统拒识",
+    "unknown": "画面不可用或模型不可用，系统无法判断；含人工补充标签的拒识样本",
+    "error": "采集失败、超时或图像无法解码，没有可用输入",
+    "misjudged": "模型给出结论但被人工纠正；高分误判只表示模型分数高，不代表整体准确率",
+}
 
 os.makedirs(IMAGE_DIR, exist_ok=True)
 
@@ -858,12 +870,16 @@ def get_all_help_requests():
 
 def _purge_old_images(keep=IMAGE_KEEP_COUNT):
     """
-    最少保留策略：只保留最近 keep 张图像文件。
+    最少保留策略：保留最近 keep 张图像文件。
 
-    记录本身不删除（失败记录与审计需要），仅清理文件并置空 file_path。
+    已有人工纠错的图片永不清理，保证“输入—结果—反馈”证据链不丢。
+    记录本身始终保留（失败记录与审计需要），仅清理文件并置空 file_path。
     """
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    c.execute("SELECT DISTINCT request_id FROM human_feedbacks")
+    pinned = {row[0] for row in c.fetchall()}
+
     c.execute("""
         SELECT request_id, file_path
         FROM image_records
@@ -874,6 +890,8 @@ def _purge_old_images(keep=IMAGE_KEEP_COUNT):
 
     purged = 0
     for request_id, file_path in rows[keep:]:
+        if request_id in pinned:
+            continue
         try:
             if file_path and os.path.exists(file_path):
                 os.remove(file_path)
@@ -890,7 +908,7 @@ def _purge_old_images(keep=IMAGE_KEEP_COUNT):
     conn.commit()
     conn.close()
     if purged:
-        print(f"[IMAGE] 保留策略清理了 {purged} 个旧文件（仅保留最近 {keep} 张）")
+        print(f"[IMAGE] 保留策略清理了 {purged} 个旧文件（保留最近 {keep} 张，纠错样本不清理）")
 
 
 def _image_mark_timeout(c, request_id):
@@ -1173,11 +1191,101 @@ def get_images():
 #      绝不给硬结论；场景类别不转换为精确位置或人身安全判断；
 #   3. 人工纠错只新增记录并快照模型原结果，推理结果永不被覆盖，
 #      用于比较高分误判与正常样例；
-#   4. 分数仅表述为"模型置信度（未经校准）"，不等于现实正确率。
+#   4. 分数仅表述为"模型输出分数（未经校准）"，不等于现实正确率。
+
+
+def _topk_to_dicts(topk):
+    """把 (label, score) 元组/旧版数组统一成前端可读的对象数组。"""
+    result = []
+    for item in topk or []:
+        if isinstance(item, dict):
+            label = item.get("label")
+            score = item.get("score")
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            label, score = item[0], item[1]
+        else:
+            continue
+        if label is None or score is None:
+            continue
+        try:
+            score = float(score)
+        except (TypeError, ValueError):
+            continue
+        result.append({"label": str(label), "score": score})
+    return result
+
+
+def _model_source(model_name, model_version):
+    """把模型内部名称映射为前端可理解的来源。"""
+    name = (model_name or "").lower()
+    version = (model_version or "").lower()
+    if name == "unavailable" or not name:
+        return "unavailable"
+    if "student" in name:
+        return "student"
+    if name.endswith("_http") or "teacher-http" in version:
+        return "teacher_http"
+    if name.endswith("_onnx") or "onnx" in version:
+        return "teacher_local_onnx"
+    return "teacher_baseline"
+
+
+def _decision_dict(topk, usability, usability_metrics, rejected_reason):
+    """生成“为什么给出/不给出结论”的可解释判定依据。
+
+    分数只作为模型输出分数展示，不解释为正确率。
+    """
+    top1 = topk[0] if len(topk) > 0 else None
+    top2 = topk[1] if len(topk) > 1 else None
+    margin = None
+    if top1 is not None and top2 is not None:
+        margin = round(float(top1["score"]) - float(top2["score"]), 6)
+
+    return {
+        "top1": top1,
+        "top2": top2,
+        "margin": margin,
+        "low_score_threshold": LOW_SCORE_THRESHOLD,
+        "ambiguous_margin": AMBIGUOUS_MARGIN,
+        "usability": usability,
+        "usability_metrics": {
+            k: round(float(v), 2) for k, v in (usability_metrics or {}).items()
+        },
+        "rejected_reason": rejected_reason,
+    }
+
+
+def _sample_bucket(img_status, inference, has_feedback):
+    """统一样例分类口径。
+
+    normal     模型接受且无纠错
+    low_score  模型拒识原因为 low_score/ambiguous，且无纠错
+    unknown    画面/模型不可用，或拒识后被人工补充答案
+    error      采集失败、超时、JPEG 无法解码
+    misjudged  模型接受但被人工纠错（叠加视图）
+    """
+    if img_status in ("failed", "blocked", "timeout"):
+        return "error"
+    if inference and inference.get("status") == "decode_failed":
+        return "error"
+
+    accepted = bool(
+        inference
+        and inference.get("status") == "ok"
+        and not inference.get("is_rejected")
+    )
+
+    if has_feedback:
+        return "misjudged" if accepted else "unknown"
+    if accepted:
+        return "normal"
+    if inference and inference.get("rejected_reason") in ("low_score", "ambiguous"):
+        return "low_score"
+    return "unknown"
 
 
 def _store_inference(request_id, result):
-    """把一次推理结果写入 inference_results（同一 request_id 覆盖为最新一次）"""
+    """把一次推理结果写入 inference_results（同一 request_id 覆盖为最新一次）。"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("""
@@ -1191,7 +1299,7 @@ def _store_inference(request_id, result):
         result.model_version, result.usability,
         json.dumps(result.usability_metrics), result.status,
         1 if result.is_rejected else 0, result.rejected_reason,
-        result.uncertain_note, json.dumps(result.topk), time.time(),
+        result.uncertain_note, json.dumps(_topk_to_dicts(result.topk)), time.time(),
     ))
     conn.commit()
     conn.close()
@@ -1215,7 +1323,7 @@ def _run_image_inference(request_id, file_path):
 
 
 def _inference_dict(request_id):
-    """查询某任务的推理结果（无则 None）"""
+    """查询某任务的推理结果（无则 None）。"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("""
@@ -1228,6 +1336,18 @@ def _inference_dict(request_id):
     conn.close()
     if not row:
         return None
+
+    try:
+        raw_topk = json.loads(row[12]) if row[12] else []
+    except (TypeError, ValueError):
+        raw_topk = []
+    topk = _topk_to_dicts(raw_topk)
+
+    try:
+        usability_metrics = json.loads(row[7]) if row[7] else {}
+    except (TypeError, ValueError):
+        usability_metrics = {}
+
     return {
         "request_id": row[0],
         "label": row[1],
@@ -1235,16 +1355,20 @@ def _inference_dict(request_id):
         "coarse": row[3],
         "model_name": row[4],
         "model_version": row[5],
+        "model_source": _model_source(row[4], row[5]),
         "usability": row[6],
-        "usability_metrics": json.loads(row[7]) if row[7] else {},
+        "usability_metrics": usability_metrics,
         "status": row[8],
         "is_rejected": bool(row[9]),
         "rejected_reason": row[10],
         "uncertain_note": row[11],
-        "topk": json.loads(row[12]) if row[12] else [],
+        "topk": topk,
+        "decision": _decision_dict(topk, row[6], usability_metrics, row[10]),
         "inferred_at": row[13],
         "inferred_at_text": (datetime.fromtimestamp(row[13]).strftime("%Y-%m-%d %H:%M:%S")
                              if row[13] else None),
+        "score_note": SCORE_NOTE,
+        "coarse_note": COARSE_NOTE if row[3] else None,
     }
 
 
@@ -1276,6 +1400,7 @@ def run_image_inference_api(request_id):
     """对已采集的图像执行（重新）推理。
 
     仅对 status=captured 且文件仍存在的任务有效；
+    已有人工纠错的任务锁定推理结果，避免覆盖“结果—反馈”对应；
     模型不可用时返回 503 并说明原因（不伪造结果）。
     """
     conn = sqlite3.connect(DB_FILE)
@@ -1283,26 +1408,39 @@ def run_image_inference_api(request_id):
     c.execute("SELECT status, file_path FROM image_records WHERE request_id=?",
               (request_id,))
     row = c.fetchone()
-    conn.close()
-
     if not row:
+        conn.close()
         return jsonify({"error": "任务不存在"}), 404
     if row[0] != "captured" or not row[1]:
+        conn.close()
         return jsonify({"error": f"任务状态为 {row[0]}，没有可推理的图像"}), 409
     if not os.path.exists(row[1]):
+        conn.close()
         return jsonify({"error": "图像文件已被保留策略清理，无法推理"}), 409
+
+    c.execute("SELECT 1 FROM human_feedbacks WHERE request_id=? LIMIT 1", (request_id,))
+    if c.fetchone():
+        conn.close()
+        return jsonify({
+            "error": "已有人工纠错，推理结果已锁定；如需新模型结果请重新采集"
+        }), 409
+    conn.close()
 
     result = _run_image_inference(request_id, row[1])
     if result is not None and result.status == "unavailable":
         return jsonify({"error": result.uncertain_note or "视觉模型不可用"}), 503
-    return jsonify({"status": "ok", "inference": _inference_dict(request_id)})
+    return jsonify({
+        "status": "ok",
+        "inference": _inference_dict(request_id),
+        "score_note": SCORE_NOTE,
+    })
 
 
 @app.route("/api/image/<request_id>/result", methods=["GET"])
 def get_image_result(request_id):
     """结构化推理结果：输入（图像记录）+ 模型结果 + 人工反馈，三者同 request_id 对应。
 
-    响应固定带 score_note：分数是未经校准的模型置信度，不等于现实正确率。
+    响应固定带 score_note：分数是未经校准的模型输出，不等于现实正确率。
     """
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -1317,11 +1455,17 @@ def get_image_result(request_id):
     if not row:
         return jsonify({"error": "任务不存在"}), 404
 
+    inference = _inference_dict(request_id)
+    feedback = _feedback_dict(request_id)
+    bucket = _sample_bucket(row[2], inference, feedback is not None)
+
     return jsonify({
         "image": _image_dict(row),
-        "inference": _inference_dict(request_id),
-        "feedback": _feedback_dict(request_id),
-        "score_note": "分数为模型内部置信度（未经校准），不代表现实正确率",
+        "inference": inference,
+        "feedback": feedback,
+        "bucket": bucket,
+        "bucket_note": BUCKET_NOTES.get(bucket, ""),
+        "score_note": SCORE_NOTE,
     })
 
 
@@ -1366,34 +1510,42 @@ def submit_image_feedback(request_id):
         f"人工纠错: 模型原判={inference['label'] if inference else None} -> {corrected_label}",
         extra={"request_id": request_id},
     )
+    updated_feedback = _feedback_dict(request_id)
+    bucket = _sample_bucket(img[0], inference, True)
     return jsonify({
         "status": "ok",
-        "feedback": _feedback_dict(request_id),
+        "feedback": updated_feedback,
         "inference": inference,
+        "bucket": bucket,
+        "bucket_note": BUCKET_NOTES.get(bucket, ""),
+        "score_note": SCORE_NOTE,
     })
 
 
 @app.route("/api/samples/compare", methods=["GET"])
 def get_samples_compare():
-    """四类样例对照：正常 / 低分未知 / 错误失败 / 误判（含高分误判）。
+    """样例对照：正常 / 低分 / 未知 / 错误 + 误判叠加视图。
 
     分类口径（按优先级）：
       error      采集失败（failed/blocked/timeout）或图像无法解码
-      misjudged  有纠错记录：模型给过结论但人工判定不符
-                 （分数 >= HIGH_SCORE_THRESHOLD 的标记 is_high_score，即高分误判）
-      low_score  推理被拒识：画面不可用 / 低分 / 类别模糊
-      normal     推理被接受且无纠错记录
+      misjudged  模型接受但被人工纠错；分数 >= HIGH_SCORE_THRESHOLD 标记高分误判
+      unknown    画面不可用 / 模型不可用；拒识后被人工补充答案也归入此桶
+      low_score  模型拒识原因为 low_score / ambiguous，且无纠错
+      normal     模型接受且无纠错（不代表真实正确率）
     """
+    limit_per_bucket = request.args.get("limit_per_bucket", 8, type=int)
+    limit_per_bucket = max(1, min(limit_per_bucket, 20))
+
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
-    buckets = {"normal": [], "low_score": [], "error": [], "misjudged": []}
+    buckets = {key: [] for key in ("normal", "low_score", "unknown", "error", "misjudged")}
 
-    # 取最近 60 条采集记录（覆盖演示所需的全部类别）
+    # 取最近 200 条采集记录，保证稀有类别也有机会出现
     c.execute("""
         SELECT request_id, device_id, status, source, file_path,
                size_bytes, device_ts_us, captured_at, error_msg, created_at
-        FROM image_records ORDER BY created_at DESC LIMIT 60
+        FROM image_records ORDER BY created_at DESC LIMIT 200
     """)
     img_rows = c.fetchall()
 
@@ -1405,50 +1557,69 @@ def get_samples_compare():
                    rejected_reason, uncertain_note, topk, inferred_at
             FROM inference_results WHERE request_id=?
         """, (rid,))
-        inf = c.fetchone()
+        inf_row = c.fetchone()
         c.execute("""
             SELECT corrected_label, note, original_label, original_score, created_at
             FROM human_feedbacks WHERE request_id=? ORDER BY id DESC LIMIT 1
         """, (rid,))
         fb = c.fetchone()
 
+        # 未完成的任务没有输入/结果，不进入样例对照
+        if img[2] in ("pending", "sent", "received") and inf_row is None:
+            continue
+
+        inference = None
+        if inf_row:
+            inference = {
+                "status": inf_row[8],
+                "is_rejected": bool(inf_row[9]),
+                "rejected_reason": inf_row[10],
+                "label": inf_row[1],
+                "score": inf_row[2],
+            }
+        bucket = _sample_bucket(img[2], inference, fb is not None)
+        if len(buckets[bucket]) >= limit_per_bucket:
+            continue
+
         # 统一样例结构：输入 / 模型结果 / 人工反馈三段同屏可对照
         item = {
             "request_id": rid,
+            "bucket": bucket,
             "status": img[2],
             "source": img[3],
             "file_url": f"/api/image/{rid}/file" if img[4] else None,
             "captured_at_text": (datetime.fromtimestamp(img[7]).strftime("%Y-%m-%d %H:%M:%S")
                                  if img[7] else None),
             "error_msg": img[8],
-            "label": inf[1] if inf else None,
-            "score": inf[2] if inf else None,
-            "coarse": inf[3] if inf else None,
-            "model_version": inf[5] if inf else None,
-            "usability": inf[6] if inf else None,
-            "is_rejected": bool(inf[9]) if inf else None,
-            "rejected_reason": inf[10] if inf else None,
-            "uncertain_note": inf[11] if inf else None,
+            "label": inf_row[1] if inf_row else None,
+            "score": inf_row[2] if inf_row else None,
+            "coarse": inf_row[3] if inf_row else None,
+            "model_name": inf_row[4] if inf_row else None,
+            "model_version": inf_row[5] if inf_row else None,
+            "model_source": _model_source(inf_row[4], inf_row[5]) if inf_row else "unavailable",
+            "usability": inf_row[6] if inf_row else None,
+            "is_rejected": bool(inf_row[9]) if inf_row else None,
+            "rejected_reason": inf_row[10] if inf_row else None,
+            "uncertain_note": inf_row[11] if inf_row else None,
             "corrected_label": fb[0] if fb else None,
             "feedback_note": fb[1] if fb else None,
+            "has_feedback": fb is not None,
         }
-
-        if img[2] in ("failed", "blocked", "timeout") or (inf and inf[8] == "decode_failed"):
-            buckets["error"].append(item)
-        elif fb:
-            # 有纠错记录 = 模型判断被人工否定；高分（>=阈值）的即"高分误判"
-            item["is_high_score"] = bool(inf and not inf[9] and (inf[2] or 0) >= HIGH_SCORE_THRESHOLD)
-            buckets["misjudged"].append(item)
-        elif inf and inf[9]:
-            buckets["low_score"].append(item)
-        elif inf and not inf[9] and img[2] == "captured":
-            buckets["normal"].append(item)
+        item["is_high_score"] = bool(
+            bucket == "misjudged"
+            and item["score"] is not None
+            and item["score"] >= HIGH_SCORE_THRESHOLD
+        )
+        buckets[bucket].append(item)
 
     conn.close()
     return jsonify({
         "buckets": buckets,
+        "counts": {key: len(items) for key, items in buckets.items()},
+        "bucket_notes": BUCKET_NOTES,
         "high_score_threshold": HIGH_SCORE_THRESHOLD,
-        "score_note": "分数为模型内部置信度（未经校准），不代表现实正确率",
+        "score_note": SCORE_NOTE,
+        "coarse_note": COARSE_NOTE,
     })
 
 

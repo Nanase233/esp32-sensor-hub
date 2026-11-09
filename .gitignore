@@ -9,6 +9,10 @@ managed_components/
 # 视觉模型二进制（第 8 周，由 server/vision/models/fetch_model.py 下载）
 server/vision/models/*.onnx
 
+# 运行时可采集图像与本地验收证据（不提交）
+server/images/
+server/week8_evidence.json
+
 # Python
 __pycache__/
 *.py[cod]

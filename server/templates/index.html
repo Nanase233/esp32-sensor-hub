@@ -441,6 +441,22 @@
         .result-meta { color: #94a3b8; font-size: 12px; }
         .result-note { color: #fcd34d; font-size: 12px; margin-top: 4px; }
         .result-caveat { color: #64748b; font-size: 12px; margin-top: 4px; }
+        .result-section { margin-top: 10px; }
+        .result-section-title { color: #93c5fd; font-size: 12px; font-weight: 600; margin-bottom: 3px; }
+        .result-section-body { color: #cbd5e1; font-size: 13px; line-height: 1.6; }
+        .decision-details { margin-top: 6px; }
+        .decision-details summary { color: #94a3b8; font-size: 12px; cursor: pointer; }
+        .decision-details pre {
+            white-space: pre-wrap; word-break: break-word; margin: 6px 0 0;
+            padding: 8px; background: #020617; border: 1px solid #1e293b;
+            border-radius: 6px; color: #94a3b8; font-size: 11px;
+        }
+        .result-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+        .result-actions button {
+            padding: 6px 12px; font-size: 12px; border-radius: 6px;
+            border: 1px solid #334155; background: #1e293b; color: #e2e8f0;
+        }
+        .result-actions button:hover { border-color: #3b82f6; }
         .topk-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
         .topk-chip {
             background: #1e293b; border: 1px solid #334155; color: #94a3b8;
@@ -454,26 +470,41 @@
             font-size: 0.9em; outline: none;
         }
         .correction-row input:focus { border-color: #3b82f6; }
+        .correction-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .correction-presets button {
+            padding: 3px 9px; font-size: 12px; border-radius: 12px;
+            border: 1px solid #334155; background: #1e293b; color: #94a3b8;
+        }
+        .correction-presets button:hover { border-color: #3b82f6; color: #e2e8f0; }
         .feedback-box { margin-top: 10px; border-top: 1px dashed #334155; padding-top: 8px; }
         .samples-compare { margin-top: 12px; border-top: 1px solid #334155; padding-top: 10px; }
         .samples-title { color: #94a3b8; font-size: 13px; margin-bottom: 8px; }
-        .samples-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        .samples-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
         .sample-col {
             background: #0f172a; border: 1px solid #1e293b; border-radius: 10px;
-            padding: 10px; min-height: 80px;
+            padding: 8px; min-height: 80px;
         }
-        .sample-col h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; }
+        .sample-col h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; }
         .sample-col.c-normal h4 { color: #6ee7b7; }
         .sample-col.c-low h4 { color: #fcd34d; }
+        .sample-col.c-unknown h4 { color: #93c5fd; }
         .sample-col.c-error h4 { color: #fca5a5; }
         .sample-col.c-misjudged h4 { color: #f0abfc; }
         .sample-item {
-            font-size: 12px; color: #94a3b8; padding: 6px;
+            display: flex; gap: 6px; align-items: flex-start;
+            font-size: 12px; color: #94a3b8; padding: 5px;
             border-radius: 6px; cursor: pointer; margin-bottom: 4px;
         }
         .sample-item:hover { background: #1e293b; color: #e2e8f0; }
         .sample-item .s-label { color: #e2e8f0; }
         .sample-item .s-high { color: #f0abfc; font-weight: 600; }
+        .sample-thumb {
+            width: 38px; height: 30px; object-fit: cover; border-radius: 4px;
+            background: #020617; flex-shrink: 0; border: 1px solid #1e293b;
+        }
+        .sample-thumb.empty { display: flex; align-items: center; justify-content: center; font-size: 9px; }
+        .sample-note { color: #64748b; font-size: 11px; margin-top: 6px; line-height: 1.5; }
+        @media (max-width: 1200px) { .samples-grid { grid-template-columns: repeat(3, 1fr); } }
         @media (max-width: 900px) { .samples-grid { grid-template-columns: repeat(2, 1fr); } }
 
         .nl-examples { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -842,7 +873,7 @@
                 </div>
                 <!-- 第 8 周：四类样例对照（正常 / 低分未知 / 错误失败 / 模型误判） -->
                 <div class="samples-compare">
-                    <div class="samples-title">样例对照：高分误判与正常样例比较（点击任一条目查看完整记录）</div>
+                    <div class="samples-title">样例对照：正常 / 低分 / 未知 / 错误 / 误判（高分误判高亮，点击查看完整记录）</div>
                     <div id="samples-grid" class="samples-grid"></div>
                 </div>
             </div>
@@ -1267,12 +1298,18 @@
         // 停止条件：任务进入 captured/blocked/failed/timeout 即停止轮询
         async function captureImage() {
             const btn = document.getElementById('capture-image-btn');
+            const recapture = document.getElementById('recapture-btn');
             const statusEl = document.getElementById('image-status');
             const frame = document.getElementById('image-frame');
+            const hadResult = !!currentImageRequestId;
 
             btn.disabled = true;
+            if (recapture) recapture.disabled = true;
             statusEl.textContent = '已发送采集请求，等待设备...';
-            frame.innerHTML = '<span class="empty-text">采集中...</span>';
+            // 重采期间保留上一次“输入—结果—反馈”，避免失败时把证据清空
+            if (!hadResult) {
+                frame.innerHTML = '<span class="empty-text">采集中...</span>';
+            }
 
             try {
                 const resp = await fetch('/api/image', {
@@ -1306,22 +1343,29 @@
 
                 if (result.status === 'captured') {
                     statusEl.textContent = `采集成功 · ${result.captured_at_text} · ${result.size_bytes} 字节 · 请求 ${result.request_id}`;
-                    frame.innerHTML = `<img src="${result.file_url}?t=${Date.now()}" alt="环境图像">`;
-                    // 第 8 周：采集成功后展示推理结果（低分/未知会给出明确说明与重新采集入口）
-                    document.getElementById('recapture-btn').style.display = '';
-                    loadImageResult(result.request_id);
+                    if (result.file_url) {
+                        frame.innerHTML = `<img src="${result.file_url}?t=${Date.now()}" alt="环境图像">`;
+                    }
+                    if (recapture) recapture.style.display = 'none';
+                    // 由 loadImageResult 统一加载对应原图 + 结果 + 反馈
+                    await loadImageResult(result.request_id);
                 } else {
                     const text = statusMap[result.status] || result.status;
-                    statusEl.textContent = `${text} · 请求 ${result.request_id}`;
-                    frame.innerHTML = `<span class="empty-text">${text}</span>`;
-                    document.getElementById('recapture-btn').style.display = 'none';
-                    document.getElementById('image-result').innerHTML = '';
+                    statusEl.textContent = `${text} · 请求 ${result.request_id}` + (hadResult ? ' · 仍显示上一次结果' : '');
+                    if (!hadResult) {
+                        frame.innerHTML = `<span class="empty-text">${esc(text)}</span>`;
+                        document.getElementById('image-result').innerHTML = '';
+                    }
+                    if (recapture) recapture.style.display = 'none';
                 }
             } catch (e) {
-                statusEl.textContent = `采集失败：${e.message}`;
-                frame.innerHTML = '<span class="empty-text">未取得图像</span>';
+                statusEl.textContent = `采集失败：${e.message}` + (hadResult ? ' · 仍显示上一次结果' : '');
+                if (!hadResult) {
+                    frame.innerHTML = '<span class="empty-text">未取得图像</span>';
+                }
             } finally {
                 btn.disabled = false;
+                if (recapture) recapture.disabled = false;
             }
         }
 
@@ -1335,7 +1379,89 @@
                 c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
         }
 
-        // 查询并渲染一次采集任务的"输入 - 模型结果 - 人工反馈"
+        // 分数统一用小数展示，避免把未校准分数误读为正确率
+        function fmtScore(v) {
+            const n = Number(v);
+            return (v == null || Number.isNaN(n)) ? '--' : n.toFixed(3);
+        }
+
+        function reasonLabel(reason) {
+            return {
+                low_score: '模型分数低',
+                ambiguous: '候选类别接近',
+                dark: '画面过暗',
+                blur: '画面模糊',
+                blocked: '疑似遮挡',
+                model_unavailable: '模型不可用',
+                decode_failed: '图像无法解码'
+            }[reason] || reason || '拒识';
+        }
+
+        function usabilityLabel(u) {
+            return {
+                clear: '画面可用',
+                dark: '画面过暗',
+                blur: '画面模糊',
+                blocked: '疑似遮挡'
+            }[u] || u || '未知';
+        }
+
+        function modelSourceLabel(source) {
+            return {
+                teacher_http: '教师基线（HTTP）',
+                teacher_local_onnx: '教师基线（本地 ONNX 兜底）',
+                teacher_baseline: '教师基线',
+                student: '学生候选',
+                unavailable: '模型不可用'
+            }[source] || source || '未知来源';
+        }
+
+        function bucketLabel(bucket) {
+            return {
+                normal: '正常（有结论）',
+                low_score: '低分（模型不确定）',
+                unknown: '未知（画面/模型不可用）',
+                error: '错误 / 失败',
+                misjudged: '误判（人工纠正）'
+            }[bucket] || bucket || '未分类';
+        }
+
+        function setCorrection(label) {
+            const input = document.getElementById('correction-input');
+            if (input) {
+                input.value = label;
+                input.focus();
+            }
+        }
+
+        function imageStatusText(status, errorMsg) {
+            if (errorMsg) return errorMsg;
+            return {
+                captured: '图像已采集',
+                blocked: '镜头遮挡/画面不可用',
+                failed: '采集失败',
+                timeout: '设备响应超时',
+                pending: '设备未响应',
+                sent: '设备未响应',
+                received: '设备未完成'
+            }[status] || status || '无图像';
+        }
+
+        // 输入：始终展示与当前 request_id 对应的原图
+        function renderImageInput(img) {
+            const frame = document.getElementById('image-frame');
+            const statusEl = document.getElementById('image-status');
+            if (img.file_url) {
+                frame.innerHTML = `<img src="${img.file_url}?t=${Date.now()}" alt="环境图像">`;
+            } else if (img.status === 'captured') {
+                frame.innerHTML = '<span class="empty-text">图像文件已按保留策略清理，结果与反馈仍保留</span>';
+            } else {
+                frame.innerHTML = `<span class="empty-text">${esc(imageStatusText(img.status, img.error_msg))}</span>`;
+            }
+            statusEl.textContent = `采集 ${img.captured_at_text || '--'} · 请求 ${img.request_id || '--'} · 来源 ${img.source || '--'}`;
+        }
+
+        // 查询并渲染一次采集任务的“输入 - 模型结果 - 人工反馈”
         async function loadImageResult(requestId) {
             currentImageRequestId = requestId;
             const box = document.getElementById('image-result');
@@ -1344,68 +1470,196 @@
                 const resp = await fetch(`/api/image/${requestId}/result`);
                 const r = await resp.json();
                 if (!resp.ok) throw new Error(r.error || '查询失败');
+                if (currentImageRequestId !== requestId) return;  // 防止慢响应覆盖新选择
                 renderImageResult(r);
             } catch (e) {
-                box.innerHTML = `<div class="result-card result-note">推理结果获取失败：${esc(e.message)}</div>`;
+                if (currentImageRequestId === requestId) {
+                    box.innerHTML = `<div class="result-card result-note">推理结果获取失败：${esc(e.message)}</div>`;
+                }
             }
+        }
+
+        function correctionHtml(requestId, fb) {
+            let html = '';
+            if (fb) {
+                html += `<div class="feedback-box">
+                    <div><b style="color:#f0abfc">人工反馈</b>：${esc(fb.corrected_label)}${fb.note ? `（${esc(fb.note)}）` : ''}</div>
+                    <div class="result-meta">模型原判：${esc(fb.original_label || '（无结论）')}${fb.original_score != null ? ' · 分数 ' + fmtScore(fb.original_score) : ''} · ${esc(fb.created_at_text || '')}</div>
+                    <div class="result-caveat">该任务已有人工纠错，推理结果已锁定；如需新模型结果请重新采集。</div>
+                </div>`;
+            }
+            html += `<div class="result-section">
+                <div class="result-section-title">人工纠错</div>
+                <div class="correction-presets">
+                    <button type="button" onclick="setCorrection('室内')">室内</button>
+                    <button type="button" onclick="setCorrection('室外')">室外</button>
+                    <button type="button" onclick="setCorrection('人物')">人物</button>
+                    <button type="button" onclick="setCorrection('动物')">动物</button>
+                    <button type="button" onclick="setCorrection('食物')">食物</button>
+                    <button type="button" onclick="setCorrection('车辆')">车辆</button>
+                    <button type="button" onclick="setCorrection('设备')">设备</button>
+                    <button type="button" onclick="setCorrection('画面不可用/看不清')">画面不可用/看不清</button>
+                    <button type="button" onclick="setCorrection('其他')">其他</button>
+                </div>
+                <div class="correction-row">
+                    <input id="correction-input" type="text" placeholder="这张图实际是什么？（可点上方预设或自由填写）">
+                    <input id="correction-note" type="text" placeholder="备注（可选）">
+                    <button class="btn-primary" onclick="submitCorrection('${esc(requestId)}')">提交纠错</button>
+                </div>
+                <div class="result-caveat">人工纠错只新增记录，不覆盖模型原结果。</div>
+            </div>`;
+            return html;
+        }
+
+        function retryAdvice(inf, accepted) {
+            if (accepted) {
+                return {show: false, text: '如模型判错，可在下方提交人工纠错；无需为了“刷新分数”反复重采。'};
+            }
+            if (inf.status === 'unavailable') {
+                return {show: false, text: '先检查教师基线/模型服务；重采不会解决模型不可用。'};
+            }
+            if (inf.status === 'decode_failed') {
+                return {show: true, label: '重新采集', text: '重采一次；连续失败请检查摄像头和上传链路。'};
+            }
+            switch (inf.usability) {
+                case 'dark':
+                    return {show: true, label: '重新采集', text: '增加光照、避免逆光后重采。'};
+                case 'blur':
+                    return {show: true, label: '重新采集', text: '保持设备稳定、清洁镜头后重采。'};
+                case 'blocked':
+                    return {show: true, label: '重新采集', text: '移除镜头遮挡物后重采。'};
+            }
+            switch (inf.rejected_reason) {
+                case 'low_score':
+                    return {show: true, label: '重新采集', text: '靠近主体、简化背景或调整角度后重采。'};
+                case 'ambiguous':
+                    return {show: true, label: '重新采集', text: '当前候选类别接近，换一个角度或背景后重采。'};
+            }
+            return {show: true, label: '重新采集', text: '调整取景后重采。'};
         }
 
         function renderImageResult(r) {
             const box = document.getElementById('image-result');
             const inf = r.inference;
             const fb = r.feedback;
+            const img = r.image || {};
+            renderImageInput(img);
+
             if (!inf) {
-                box.innerHTML = '<div class="result-card result-meta">该图像尚未进行推理（采集失败或模型当时不可用时不产出推理结果）</div>';
+                box.innerHTML = `<div class="result-card">
+                    <div class="result-head"><span class="result-label">尚未产出推理结果</span><span class="result-badge warn">无结果</span></div>
+                    <div class="result-caveat">${esc(imageStatusText(img.status, img.error_msg))}。没有模型结论时，仍可按原图提交人工纠正。</div>
+                    ${correctionHtml(img.request_id || currentImageRequestId, fb)}
+                </div>`;
                 return;
             }
 
-            // 状态徽标：ok=给出结论 / warn=拒识（还不能确定） / err=模型不可用
+            const accepted = inf.status === 'ok' && !inf.is_rejected;
             let badge, headText;
-            if (inf.status === 'ok' && !inf.is_rejected) {
+            if (accepted) {
                 badge = '<span class="result-badge ok">已给出结论</span>';
-                headText = `<span class="result-label">${esc(inf.label)}</span>`;
+                headText = `<span class="result-label">${esc(inf.label || '未命名')}</span>`;
             } else if (inf.status === 'unavailable') {
                 badge = '<span class="result-badge err">模型不可用</span>';
                 headText = '<span class="result-label">无法推理</span>';
+            } else if (inf.status === 'decode_failed') {
+                badge = '<span class="result-badge err">图像无法解码</span>';
+                headText = '<span class="result-label">未给出结论</span>';
             } else {
                 badge = '<span class="result-badge warn">还不能确定</span>';
                 headText = '<span class="result-label">未给出确定结论</span>';
             }
 
-            const pct = (inf.score == null) ? null : (inf.score * 100).toFixed(1) + '%';
-            const usabilityText = { clear: '画面可用', dark: '画面过暗', blur: '画面模糊', blocked: '疑似遮挡' }[inf.usability] || inf.usability;
+            const top1 = (inf.topk && inf.topk.length) ? inf.topk[0] : null;
+            const scoreText = inf.score != null
+                ? `模型分数 ${fmtScore(inf.score)}（未校准）`
+                : (top1 ? `最高候选分数 ${fmtScore(top1.score)}（未校准）` : '无模型分数');
+            const sourceText = modelSourceLabel(inf.model_source);
+            const usabilityText = usabilityLabel(inf.usability);
 
             let html = `<div class="result-card">
                 <div class="result-head">${headText}${badge}
-                    ${pct ? `<span class="result-meta">模型置信度 ${pct}</span>` : ''}
+                    <span class="result-meta">${esc(sourceText)}</span>
                     <span class="result-meta">模型版本 ${esc(inf.model_version || '未知')}</span>
-                    ${inf.coarse ? `<span class="result-meta">场景粗分类 ${esc(inf.coarse)}</span>` : ''}
+                    <span class="result-meta">${esc(scoreText)}</span>
+                    ${inf.coarse ? `<span class="result-meta" title="${esc(inf.coarse_note || '')}">场景粗分类 ${esc(inf.coarse)}</span>` : ''}
+                    <span class="result-meta">请求 ${esc(img.request_id || inf.request_id || '--')}</span>
                 </div>
-                <div class="result-caveat">${esc(r.score_note || '')}　画面可用性：${esc(usabilityText)}</div>`;
+                <div class="result-caveat">${esc(r.score_note || inf.score_note || '')}　画面可用性：${esc(usabilityText)}</div>`;
 
-            // 拒识：明确表达"还有什么不能确定"及原因
-            if (inf.is_rejected) {
-                html += `<div class="result-note">还不能确定：${esc(inf.uncertain_note || inf.rejected_reason || '')}</div>`;
+            let seen;
+            if (accepted) {
+                seen = `模型标签 <b>${esc(inf.label || '未命名')}</b>`;
+                if (inf.coarse) seen += `；场景粗分类 <b>${esc(inf.coarse)}</b>（规则后处理，非模型结论）`;
+            } else if (inf.status === 'unavailable') {
+                seen = '模型没有返回可用结果；原图已保留，便于排查和人工纠正。';
+            } else if (inf.status === 'decode_failed') {
+                seen = '图像无法解码，未进入模型推理。';
+            } else {
+                seen = `原图已保留；画面可用性：${esc(usabilityText)}。模型没有给出可接受的确定结论。`;
             }
-            // 候选标签（点击填入纠错框）
+            html += `<div class="result-section">
+                <div class="result-section-title">看到了什么</div>
+                <div class="result-section-body">${seen}</div>
+            </div>`;
+
+            let uncertain;
+            if (inf.is_rejected) {
+                uncertain = inf.uncertain_note || reasonLabel(inf.rejected_reason);
+            } else if (accepted) {
+                uncertain = '未触发拒识；模型分数只代表模型输出，不代表现实正确率。';
+            } else {
+                uncertain = inf.uncertain_note || '当前没有可用的确定结论。';
+            }
+            html += `<div class="result-section">
+                <div class="result-section-title">还有什么不能确定</div>
+                <div class="result-section-body">${esc(uncertain)}</div>
+            </div>`;
+
+            const d = inf.decision || {};
+            const evidence = [];
+            if (d.top1) evidence.push(`top1：${esc(d.top1.label)}，分数 ${fmtScore(d.top1.score)}`);
+            if (d.top2) evidence.push(`top2：${esc(d.top2.label)}，分数 ${fmtScore(d.top2.score)}`);
+            if (d.margin != null) evidence.push(`top1-top2 分差：${fmtScore(d.margin)}`);
+            if (inf.rejected_reason === 'low_score' && d.low_score_threshold != null) {
+                evidence.push(`低分阈值：${fmtScore(d.low_score_threshold)}（操作截止线，不是正确率）`);
+            }
+            if (inf.rejected_reason === 'ambiguous' && d.ambiguous_margin != null) {
+                evidence.push(`分差阈值：${fmtScore(d.ambiguous_margin)}`);
+            }
+            if (d.usability && d.usability !== 'clear') {
+                const m = d.usability_metrics || {};
+                evidence.push(`画面指标：亮度 ${m.mean != null ? m.mean : '--'} / 对比度 ${m.std != null ? m.std : '--'} / 清晰度 ${m.lap_var != null ? m.lap_var : '--'}`);
+            }
+            if (evidence.length) {
+                html += `<details class="decision-details">
+                    <summary>判定依据（分数未校准）</summary>
+                    <div class="result-section-body">${evidence.join('<br>')}</div>
+                </details>`;
+            }
+
             if (inf.topk && inf.topk.length) {
+                if (inf.usability && inf.usability !== 'clear') {
+                    html += '<div class="result-caveat">画面不可用，以下候选标签仅供参考，不作为结论。</div>';
+                }
                 html += '<div class="topk-chips">' + inf.topk.slice(0, 5).map(t =>
-                    `<span class="topk-chip" data-label="${esc(t.label)}">${esc(t.label)} ${(t.score * 100).toFixed(1)}%</span>`
+                    `<span class="topk-chip" data-label="${esc(t.label)}" title="点击填入人工纠错">${esc(t.label)} ${fmtScore(t.score)}</span>`
                 ).join('') + '</div>';
             }
 
-            // 人工纠错入口
-            html += `<div class="correction-row">
-                    <input id="correction-input" type="text" placeholder="人工纠错：这张图实际是什么？（如：办公桌面）">
-                    <button class="btn-primary" onclick="submitCorrection('${esc(inf.request_id)}')">提交纠错</button>
-                </div>`;
+            const advice = retryAdvice(inf, accepted);
+            html += `<div class="result-section">
+                <div class="result-section-title">下一步</div>
+                <div class="result-section-body">${esc(advice.text)}</div>`;
+            if (advice.show) {
+                html += `<div class="result-actions"><button type="button" onclick="captureImage()">${esc(advice.label)}</button></div>`;
+            }
+            html += `</div>`;
 
-            // 已有纠错：展示"模型原判 -> 人工修正"对照
-            if (fb) {
-                html += `<div class="feedback-box">
-                        <div><b style="color:#f0abfc">人工反馈</b>：${esc(fb.corrected_label)}${fb.note ? `（${esc(fb.note)}）` : ''}</div>
-                        <div class="result-meta">模型原判：${esc(fb.original_label || '（无结论）')}${fb.original_score != null ? ' ' + (fb.original_score * 100).toFixed(1) + '%' : ''} · ${esc(fb.created_at_text || '')}</div>
-                    </div>`;
+            html += correctionHtml(img.request_id || inf.request_id, fb);
+
+            if (r.bucket) {
+                html += `<div class="result-caveat">样例归类：${esc(bucketLabel(r.bucket))}${r.bucket_note ? ' · ' + esc(r.bucket_note) : ''}</div>`;
             }
             html += '</div>';
             box.innerHTML = html;
@@ -1413,24 +1667,30 @@
 
         async function submitCorrection(requestId) {
             const input = document.getElementById('correction-input');
-            const corrected = (input.value || '').trim();
+            const noteInput = document.getElementById('correction-note');
+            const target = requestId || currentImageRequestId;
+            const corrected = (input && input.value || '').trim();
+            if (!target) { alert('当前没有可纠错的图像'); return; }
             if (!corrected) { alert('请先填写人工纠正后的标签'); return; }
             try {
-                const resp = await fetch(`/api/image/${requestId}/feedback`, {
+                const resp = await fetch(`/api/image/${target}/feedback`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({corrected_label: corrected, note: ''})
+                    body: JSON.stringify({
+                        corrected_label: corrected,
+                        note: (noteInput && noteInput.value || '').trim()
+                    })
                 });
                 const r = await resp.json();
                 if (!resp.ok) throw new Error(r.error || '提交失败');
-                loadImageResult(requestId);   // 刷新：模型原判 -> 人工修正
-                loadSamplesCompare();         // 刷新对照样例
+                await loadImageResult(target);   // 刷新：模型原判 -> 人工修正
+                loadSamplesCompare();            // 刷新对照样例
             } catch (e) {
                 alert('纠错提交失败：' + e.message);
             }
         }
 
-        // 四类样例对照：正常 / 低分未知 / 错误失败 / 模型误判（高分误判高亮）
+        // 四类基础对照 + 误判叠加：正常 / 低分 / 未知 / 错误 / 误判
         async function loadSamplesCompare() {
             const grid = document.getElementById('samples-grid');
             try {
@@ -1440,38 +1700,56 @@
 
                 const cols = [
                     { key: 'normal', cls: 'c-normal', title: '正常（有结论）' },
-                    { key: 'low_score', cls: 'c-low', title: '低分 / 未知' },
+                    { key: 'low_score', cls: 'c-low', title: '低分（模型不确定）' },
+                    { key: 'unknown', cls: 'c-unknown', title: '未知（画面/模型不可用）' },
                     { key: 'error', cls: 'c-error', title: '错误 / 失败' },
-                    { key: 'misjudged', cls: 'c-misjudged', title: '模型误判' }
+                    { key: 'misjudged', cls: 'c-misjudged', title: '误判（人工纠正）' }
                 ];
                 grid.innerHTML = cols.map(col => {
                     const items = (r.buckets[col.key] || []).slice(0, 8);
+                    const note = (r.bucket_notes && r.bucket_notes[col.key]) || '';
                     const body = items.length ? items.map(it => {
                         let main;
                         if (it.corrected_label) {
-                            // 模型判断被人工否定：展示 模型原判 -> 人工修正
-                            main = `模型判 <span class="s-label">${esc(it.label || '无结论')}</span> → 人工 <span class="s-label">${esc(it.corrected_label)}</span>`;
+                            const modelPart = it.label
+                                ? `模型判 <span class="s-label">${esc(it.label)}</span>`
+                                : '模型拒识';
+                            main = `${modelPart} → 人工 <span class="s-label">${esc(it.corrected_label)}</span>`;
                         } else if (it.is_rejected) {
-                            main = `<span class="s-label">${esc(it.rejected_reason || '拒识')}</span>`;
+                            main = `<span class="s-label">${esc(reasonLabel(it.rejected_reason))}</span>`;
                         } else {
-                            main = `<span class="s-label">${esc(it.label || it.status)}</span>${it.score != null ? ' ' + (it.score * 100).toFixed(0) + '%' : ''}`;
+                            const fallback = it.status === 'captured' ? '未产出结果' : (it.status || '未知');
+                            main = `<span class="s-label">${esc(it.label || fallback)}</span>`;
+                            if (it.score != null) main += ` · 分数 ${fmtScore(it.score)}`;
                         }
                         const high = it.is_high_score ? ' <span class="s-high">高分误判</span>' : '';
-                        return `<div class="sample-item" onclick="loadImageResult('${esc(it.request_id)}')" title="点击查看该样例的完整记录">${main}${high}</div>`;
+                        const thumb = it.file_url
+                            ? `<img class="sample-thumb" src="${it.file_url}?t=${Date.now()}" alt="" loading="lazy">`
+                            : '<span class="sample-thumb empty">无图</span>';
+                        const sourceTag = it.source === 'replay' ? ' · 回放' : '';
+                        return `<div class="sample-item" data-request-id="${esc(it.request_id)}" title="${esc(note + sourceTag)}；点击查看完整记录">${thumb}<div>${main}${high}</div></div>`;
                     }).join('') : '<div class="empty-text" style="font-size:12px">暂无</div>';
-                    return `<div class="sample-col ${col.cls}"><h4>${col.title}</h4>${body}</div>`;
-                }).join('');
+                    const count = (r.counts && r.counts[col.key] != null) ? r.counts[col.key] : items.length;
+                    return `<div class="sample-col ${col.cls}" title="${esc(note)}"><h4>${col.title} (${count})</h4>${body}</div>`;
+                }).join('') + `<div class="sample-note" style="grid-column:1/-1">${esc(r.score_note || '')}。${esc(r.coarse_note || '')}。正常样本仅表示“未被人工否定”，不代表真实正确率。</div>`;
             } catch (e) {
                 grid.innerHTML = `<div class="empty-text">对照样例加载失败：${esc(e.message)}</div>`;
             }
         }
 
-        // 候选标签点击 -> 填入纠错框（事件委托，避免标签文本拼接进 onclick）
+        // 候选标签点击 -> 填入纠错框；样例点击 -> 加载对应原图/结果/反馈
         document.addEventListener('click', (e) => {
             const chip = e.target.closest('.topk-chip');
             if (chip) {
                 const input = document.getElementById('correction-input');
                 if (input) input.value = chip.dataset.label || '';
+                return;
+            }
+            const sample = e.target.closest('.sample-item');
+            if (sample && sample.dataset.requestId) {
+                loadImageResult(sample.dataset.requestId);
+                const box = document.getElementById('image-result');
+                if (box) box.scrollIntoView({behavior: 'smooth', block: 'nearest'});
             }
         });
 

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "note": "仓库内置测试夹具。它们是真实 JPEG，但 source 不是 device，不能替代真机采集证据。真机验收请使用 source=device 的 request_id，并在 week8_evidence.json 中记录。",
+  "fixtures": [
+    {
+      "file": "sample_capture.jpg",
+      "sha256": "2f6c580c2067fc844dfe6769cc55ee97a816c035aaecea6b4ab9bd969d686f91",
+      "purpose": "正常画面 / 普通推理路径",
+      "expected_usability": "clear",
+      "counts_as_device_evidence": false
+    },
+    {
+      "file": "sample_lowconf.jpg",
+      "sha256": "3229c73007d54b74d1f60d474c49a3826ae2194e847ebf2043606c07960a8336",
+      "purpose": "低分或类别接近的拒识路径",
+      "expected_usability": "clear",
+      "counts_as_device_evidence": false
+    }
+  ]
+}
