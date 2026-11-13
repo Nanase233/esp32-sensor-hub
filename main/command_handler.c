@@ -7,17 +7,24 @@
  *   3. 执行一次 IMU 采集，携带 request_id 上传
  *   4. 上传失败则上报失败（POST /api/collect/<id>/fail）
  *
- * 第 7 周扩展：
- *   轮询结果带 type 字段，type=image 时转交按需图像采集模块，
- *   type=imu（默认）走原有 IMU 采集流程。
+ * 任务分派（按响应里的 type 字段）：
+ *   type=image     第 7 周：按需图像采集  → image_capture_run()
+ *   type=inquiry   第 9 周：主动询问      → inquiry_handler_on_inquiry()
+ *   type=imu（默认）第 2 周：IMU 采集     → execute_collect_command()
+ *
+ * 第 9 周说明：询问复用这条既有轮询通道，因此设备端 HTTP 请求次数不变。
+ * 服务端按 image → inquiry → imu 的顺序返回任务，询问不会挤占图像任务。
+ *
+ * HTTP 读写已提取到 http_client_util.c（与 inquiry_handler 共用），行为不变。
  */
 
 #include "command_handler.h"
 #include "wifi_manager.h"
 #include "http_uploader.h"
+#include "http_client_util.h"
 #include "qma7981.h"
 #include "image_capture.h"
-#include "esp_http_client.h"
+#include "inquiry_handler.h"
 #include "esp_log.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
@@ -27,176 +34,82 @@
 
 static const char *TAG = "CMD";
 
-/* HTTP 响应缓冲区大小 */
-#define HTTP_RESP_BUF_SIZE  512
+/* HTTP 响应缓冲区大小（第 9 周放大：询问响应含中文问句与多个字段） */
+#define HTTP_RESP_BUF_SIZE  768
 
 /**
- * 执行 HTTP GET 请求并返回响应体
- *
- * @param url 请求 URL
- * @param resp_buf 响应缓冲区
- * @param buf_size 缓冲区大小
- * @return 实际读取字节数，-1 表示失败
+ * 一条待执行命令（轮询结果）
  */
-static int http_get(const char *url, char *resp_buf, size_t buf_size)
-{
-    esp_http_client_config_t config = {
-        .url = url,
-        .method = HTTP_METHOD_GET,
-        .timeout_ms = 5000,
-    };
-
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        ESP_LOGW(TAG, "HTTP GET 初始化失败");
-        return -1;
-    }
-
-    /* 使用 open + fetch_headers + read 方式，确保能读取响应体 */
-    esp_err_t err = esp_http_client_open(client, 0);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "HTTP GET open 失败: %s", esp_err_to_name(err));
-        esp_http_client_cleanup(client);
-        return -1;
-    }
-
-    int content_length = esp_http_client_fetch_headers(client);
-    ESP_LOGI(TAG, "HTTP GET 响应头获取完成, content_length=%d", content_length);
-
-    int status = esp_http_client_get_status_code(client);
-    if (status != 200) {
-        ESP_LOGW(TAG, "HTTP GET 状态码: %d", status);
-        /* 读取并丢弃响应体 */
-        char discard[64];
-        while (esp_http_client_read(client, discard, sizeof(discard)) > 0) {}
-        esp_http_client_cleanup(client);
-        return -1;
-    }
-
-    /* 读取响应体 */
-    int total_read = 0;
-    int read_len;
-    while (total_read < (int)buf_size - 1) {
-        read_len = esp_http_client_read(client, resp_buf + total_read,
-                                         buf_size - total_read - 1);
-        if (read_len <= 0) {
-            break;
-        }
-        total_read += read_len;
-    }
-    resp_buf[total_read] = '\0';
-    ESP_LOGI(TAG, "HTTP GET 读取 %d 字节: %.128s", total_read, resp_buf);
-
-    esp_http_client_cleanup(client);
-    return total_read;
-}
-
-/**
- * 执行 HTTP POST 请求
- *
- * @param url 请求 URL
- * @param json_body JSON 请求体（可为 NULL）
- * @return ESP_OK 成功
- */
-static esp_err_t http_post(const char *url, const char *json_body)
-{
-    esp_http_client_config_t config = {
-        .url = url,
-        .method = HTTP_METHOD_POST,
-        .timeout_ms = 5000,
-    };
-
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        ESP_LOGW(TAG, "HTTP POST 初始化失败");
-        return ESP_FAIL;
-    }
-
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-
-    if (json_body) {
-        esp_http_client_set_post_field(client, json_body, strlen(json_body));
-    } else {
-        esp_http_client_set_post_field(client, "{}", 2);
-    }
-
-    esp_err_t err = esp_http_client_open(client, strlen(json_body ? json_body : "{}"));
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "HTTP POST open 失败: %s", esp_err_to_name(err));
-        esp_http_client_cleanup(client);
-        return ESP_FAIL;
-    }
-
-    esp_http_client_fetch_headers(client);
-    int status = esp_http_client_get_status_code(client);
-
-    /* 读取并丢弃响应体 */
-    char discard[64];
-    while (esp_http_client_read(client, discard, sizeof(discard)) > 0) {}
-    esp_http_client_cleanup(client);
-
-    if (status == 200 || status == 201) {
-        ESP_LOGI(TAG, "HTTP POST 成功: %s (状态 %d)", url, status);
-        return ESP_OK;
-    }
-
-    ESP_LOGW(TAG, "HTTP POST 状态码: %d, URL: %s", status, url);
-    return ESP_FAIL;
-}
+typedef struct {
+    char request_id[24];                    /* 任务/询问 ID */
+    char type[12];                          /* imu / image / inquiry */
+    char question[INQUIRY_QUESTION_MAX];    /* 仅 inquiry 使用 */
+    char reason_label[48];                  /* 仅 inquiry 使用 */
+    int  attempt_no;                        /* 仅 inquiry 使用：第几轮询问 */
+    int  expires_in_s;                      /* 仅 inquiry 使用，<=0 表示未给出 */
+} pending_cmd_t;
 
 /**
  * 轮询待执行命令
  *
- * @param request_id 输出：任务 ID
- * @param id_size 缓冲区大小
- * @param task_type 输出：任务类型（"imu" / "image"）
- * @param type_size 类型缓冲区大小
- * @return ESP_OK 且 *request_id 非空表示收到命令
+ * @param cmd 输出：命令内容（调用前无需初始化，函数内部会清零）
+ * @return ESP_OK（cmd->request_id 为空表示当前没有待执行命令）
  */
-static esp_err_t poll_pending_command(char *request_id, size_t id_size,
-                                      char *task_type, size_t type_size)
+static esp_err_t poll_pending_command(pending_cmd_t *cmd)
 {
+    memset(cmd, 0, sizeof(*cmd));
+    /* 默认按 IMU 任务处理，保持与原接口兼容 */
+    strncpy(cmd->type, "imu", sizeof(cmd->type) - 1);
+
     char url[128];
     snprintf(url, sizeof(url), "%s/api/collect/pending", SERVER_BASE_URL);
 
     char resp_buf[HTTP_RESP_BUF_SIZE];
-    int read_len = http_get(url, resp_buf, sizeof(resp_buf));
-
-    /* 默认按 IMU 任务处理，保持与原接口兼容 */
-    strncpy(task_type, "imu", type_size - 1);
-    task_type[type_size - 1] = '\0';
-
+    int read_len = http_util_get_text(url, resp_buf, sizeof(resp_buf));
     if (read_len <= 0) {
-        request_id[0] = '\0';
         ESP_LOGD(TAG, "轮询无待执行命令 (read_len=%d)", read_len);
-        return ESP_OK;  /* 无响应或无待执行命令 */
+        return ESP_OK;
     }
 
     cJSON *root = cJSON_Parse(resp_buf);
     if (!root) {
-        request_id[0] = '\0';
+        ESP_LOGW(TAG, "轮询响应不是合法 JSON: %.64s", resp_buf);
         return ESP_OK;
     }
 
     cJSON *rid = cJSON_GetObjectItem(root, "request_id");
     if (rid && cJSON_IsString(rid) && rid->valuestring && rid->valuestring[0] != '\0') {
-        strncpy(request_id, rid->valuestring, id_size - 1);
-        request_id[id_size - 1] = '\0';
+        strncpy(cmd->request_id, rid->valuestring, sizeof(cmd->request_id) - 1);
 
-        /* 读取任务类型（服务端第 7 周新增字段） */
         cJSON *type = cJSON_GetObjectItem(root, "type");
         if (type && cJSON_IsString(type) && type->valuestring) {
-            strncpy(task_type, type->valuestring, type_size - 1);
-            task_type[type_size - 1] = '\0';
+            strncpy(cmd->type, type->valuestring, sizeof(cmd->type) - 1);
         }
 
-        cJSON_Delete(root);
-        return ESP_OK;
+        /* 第 9 周：询问任务携带问句、原因标签与剩余有效期 */
+        cJSON *question = cJSON_GetObjectItem(root, "question");
+        if (question && cJSON_IsString(question) && question->valuestring) {
+            strncpy(cmd->question, question->valuestring, sizeof(cmd->question) - 1);
+        }
+
+        cJSON *reason = cJSON_GetObjectItem(root, "reason_label");
+        if (reason && cJSON_IsString(reason) && reason->valuestring) {
+            strncpy(cmd->reason_label, reason->valuestring, sizeof(cmd->reason_label) - 1);
+        }
+
+        cJSON *expires = cJSON_GetObjectItem(root, "expires_in_s");
+        if (expires && cJSON_IsNumber(expires)) {
+            cmd->expires_in_s = expires->valueint;
+        }
+
+        cJSON *attempt = cJSON_GetObjectItem(root, "attempt_no");
+        if (attempt && cJSON_IsNumber(attempt)) {
+            cmd->attempt_no = attempt->valueint;
+        }
     }
 
     cJSON_Delete(root);
-    request_id[0] = '\0';
-    return ESP_OK;  /* 无待执行命令 */
+    return ESP_OK;
 }
 
 /**
@@ -207,7 +120,7 @@ static esp_err_t mark_received(const char *request_id)
     char url[128];
     snprintf(url, sizeof(url), "%s/api/collect/%s/received", SERVER_BASE_URL, request_id);
 
-    esp_err_t ret = http_post(url, "{}");
+    esp_err_t ret = http_util_post_json(url, "{}");
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "命令已确认: %s", request_id);
     }
@@ -227,7 +140,7 @@ static esp_err_t mark_failed(const char *request_id, const char *error_msg)
     char *json_str = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
 
-    esp_err_t ret = http_post(url, json_str);
+    esp_err_t ret = http_util_post_json(url, json_str);
     free(json_str);
 
     if (ret == ESP_OK) {
@@ -237,7 +150,7 @@ static esp_err_t mark_failed(const char *request_id, const char *error_msg)
 }
 
 /**
- * 执行采集命令
+ * 执行 IMU 采集命令
  */
 static void execute_collect_command(const char *request_id)
 {
@@ -275,20 +188,24 @@ void command_handler_task(void *pvParameters)
     while (1) {
         /* 仅在 WiFi 连接时轮询 */
         if (wifi_manager_is_connected()) {
-            char request_id[16] = {0};
-            char task_type[12] = {0};
+            pending_cmd_t cmd;
+            esp_err_t err = poll_pending_command(&cmd);
 
-            esp_err_t err = poll_pending_command(request_id, sizeof(request_id),
-                                                 task_type, sizeof(task_type));
-            if (err == ESP_OK && request_id[0] != '\0') {
-                if (strcmp(task_type, "image") == 0) {
+            if (err == ESP_OK && cmd.request_id[0] != '\0') {
+                if (strcmp(cmd.type, "inquiry") == 0) {
+                    /* 第 9 周：主动询问（画面不可用 → 是否重拍） */
+                    ESP_LOGI(TAG, "收到询问命令: %s", cmd.request_id);
+                    inquiry_handler_on_inquiry(cmd.request_id, cmd.question,
+                                               cmd.reason_label, cmd.attempt_no,
+                                               cmd.expires_in_s);
+                } else if (strcmp(cmd.type, "image") == 0) {
                     /* 第 7 周：按需图像采集任务 */
-                    ESP_LOGI(TAG, "收到图像采集命令: %s", request_id);
-                    image_capture_run(request_id);
+                    ESP_LOGI(TAG, "收到图像采集命令: %s", cmd.request_id);
+                    image_capture_run(cmd.request_id);
                 } else {
                     /* 第 2 周：IMU 采集任务 */
-                    ESP_LOGI(TAG, "收到采集命令: %s", request_id);
-                    execute_collect_command(request_id);
+                    ESP_LOGI(TAG, "收到采集命令: %s", cmd.request_id);
+                    execute_collect_command(cmd.request_id);
                 }
             }
 

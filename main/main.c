@@ -22,6 +22,7 @@
 #include "command_handler.h"
 #include "button_handler.h"
 #include "image_capture.h"
+#include "inquiry_handler.h"
 
 static const char *TAG = "MAIN";
 
@@ -64,7 +65,11 @@ void app_main(void)
     ESP_LOGI(TAG, "启动按键处理器...");
     button_handler_init();
 
-    /* 5. 主循环：采集 + 上传 */
+    /* 5. 初始化主动询问模块（第 9 周任务：询问经命令通道下发，无独立任务） */
+    ESP_LOGI(TAG, "初始化主动询问模块...");
+    inquiry_handler_init();
+
+    /* 6. 主循环：采集 + 上传 */
     qma7981_data_t accel;
     uint32_t sample_count = 0;
     uint32_t upload_count = 0;

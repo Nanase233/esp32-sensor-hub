@@ -8,12 +8,19 @@
  *   4. 每 2 秒轮询服务端获取回应/取消状态
  *   5. 收到回应 → LED 长亮确认；收到取消 → LED 熄灭
  *
+ * 第 9 周扩展（画面不可用的主动询问）：
+ *   - 有未决询问时按键改为"答复询问"：短按 = 重拍，长按 >=800ms = 不用了；
+ *     无询问时按键行为与第 3 周完全一致（按下即求助）。
+ *   - LED 优先级：求助（P0）> 询问（P1）。求助未决时询问提示让位，
+ *     求助空闲时用双闪提示"有询问待答复"。
+ *
  * 断网容错：
  *   - 按键触发后立即本地反馈（不依赖网络）
  *   - 网络失败时记录日志，不阻塞主流程
  */
 
 #include "button_handler.h"
+#include "inquiry_handler.h"
 #include "wifi_manager.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -65,6 +72,20 @@ typedef enum {
 static help_state_t s_help_state = HELP_IDLE;
 static char s_request_id[16] = {0};  /* 当前求助请求 ID */
 static int s_button_press_count = 0; /* 按键按下计数（用于调试） */
+
+/* 第 9 周：按键按下时刻与按下中标志（用于区分短按/长按） */
+static int64_t s_press_start_us = 0;
+static int s_press_tracking = 0;
+
+/**
+ * 求助是否占用反馈通道（P0）
+ *
+ * 等待回应或已回应常亮期间，LED 与按键都归求助，询问（P1）不得抢占。
+ */
+static bool help_owns_feedback(void)
+{
+    return (s_help_state == HELP_PENDING || s_help_state == HELP_RESPONDED);
+}
 
 /* ==================== 硬件控制 ==================== */
 
@@ -140,6 +161,33 @@ static void feedback_idle(void)
 {
     ESP_LOGI(TAG, "=== 回到空闲状态（LED 熄灭） ===");
     led_off();
+}
+
+/* ==================== 第 9 周：询问提示（LED 仲裁） ==================== */
+
+/**
+ * 询问待答复时的 LED 双闪节律
+ *
+ * 反馈优先级（本周要求）：
+ *   P0 求助回应（第 3 周）> P1 画面不可用询问（第 9 周）
+ * 因此求助处于「等待回应 / 已回应常亮」时，LED 归求助通道，询问提示让位；
+ * 求助空闲时才由询问接管，避免两路反馈抢同一个 GPIO 造成闪烁语义混乱。
+ */
+static void update_inquiry_led(void)
+{
+    if (help_owns_feedback()) {
+        return;   /* P0 占用 LED */
+    }
+
+    if (!inquiry_handler_is_asking()) {
+        led_off();
+        return;
+    }
+
+    /* 双闪：0–100ms 亮 / 100–200ms 灭 / 200–300ms 亮 / 300–2000ms 灭，2s 一循环 */
+    uint32_t phase_ms = (uint32_t)((esp_timer_get_time() / 1000) % 2000);
+    bool on = (phase_ms < 100) || (phase_ms >= 200 && phase_ms < 300);
+    gpio_set_level(LED_GPIO, on ? 1 : 0);
 }
 
 /* ==================== HTTP 通信 ==================== */
@@ -377,13 +425,30 @@ static void button_handler_task(void *pvParameters)
         /* 1. 读取按键状态 */
         int button_level = gpio_get_level(BUTTON_GPIO);
 
-        /* 2. 检测下降沿（按键按下） */
+        /* 2. 下降沿：按下
+         *    求助未决（P0）或没有询问时，保持第 3 周行为（按下即触发求助）；
+         *    只有在"有询问且求助空闲"时才把按键留给询问答复，等松手后判定短按/长按。 */
         if (last_button_level == 1 && button_level == 0) {
-            handle_button_press();
+            s_press_start_us = esp_timer_get_time();
+            s_press_tracking = 1;
+            if (help_owns_feedback() || !inquiry_handler_is_asking()) {
+                handle_button_press();
+            } else {
+                ESP_LOGI(TAG, "按键用于答复询问（松手后判定短按/长按）");
+            }
+        }
+
+        /* 3. 上升沿：松手，区分短按（重拍）与长按（不用了） */
+        if (s_press_tracking && last_button_level == 0 && button_level == 1) {
+            s_press_tracking = 0;
+            if (inquiry_handler_is_asking() && !help_owns_feedback()) {
+                uint32_t held_ms = (uint32_t)((esp_timer_get_time() - s_press_start_us) / 1000);
+                inquiry_handler_answer(held_ms < INQUIRY_LONG_PRESS_MS);
+            }
         }
         last_button_level = button_level;
 
-        /* 3. 轮询服务端回应（仅在有待处理求助时） */
+        /* 4. 轮询服务端回应（仅在有待处理求助时） */
         if (s_help_state == HELP_PENDING && wifi_manager_is_connected()) {
             response_poll_count++;
             if (response_poll_count % (RESPONSE_POLL_INTERVAL_MS / BUTTON_POLL_INTERVAL_MS) == 0) {
@@ -395,6 +460,10 @@ static void button_handler_task(void *pvParameters)
                 }
             }
         }
+
+        /* 5. 第 9 周：清理过期询问 + 更新询问提示 LED（求助优先） */
+        inquiry_handler_tick();
+        update_inquiry_led();
 
         vTaskDelay(pdMS_TO_TICKS(BUTTON_POLL_INTERVAL_MS));
     }
