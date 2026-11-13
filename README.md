@@ -25,6 +25,7 @@
 - ✅ OV2640 摄像头环境图像按需采集（JPEG 抓取；暗光/遮挡帧仍上传）
 - ✅ 图像采集任务状态机（pending → sent → received → captured / failed）
 - ✅ IMU I2C 总线与摄像头 SCCB 时分复用，采集后自动恢复 IMU 采样
+- ✅ 主动询问的实体答复通道（第 9 周）：询问下发、LED 双闪、短按=重拍 / 长按=不用了
 
 ### 服务端
 - ✅ Flask REST API 接收数据
@@ -39,6 +40,8 @@
 - ✅ 低分 / 画面不可用（暗、模糊、遮挡）→ 拒识，明确“还不能确定”及原因（第 8 周）
 - ✅ 人工纠错入口：模型原结果快照留存；纠错后锁定推理，保证结果—反馈对应（第 8 周）
 - ✅ 样例对照：正常 / 低分 / 未知 / 错误 / 误判（高分误判高亮）（第 8 周）
+- ✅ 画面不可用 → 主动询问「是否重拍」：事件触发、确认/忽略/误判纠正、冷却与单飞行（第 9 周）
+- ✅ 重拍复用原有图像任务流，结果回填原询问；达重拍上限转求助建议（第 9 周）
 
 ## 硬件要求
 
@@ -132,13 +135,20 @@ esp32-imu/
 │   ├── command_handler.c      # 命令轮询与任务路由（含图像任务）
 │   ├── image_capture.h        # OV2640 拍照模块头文件
 │   ├── image_capture.c        # OV2640 拍照模块实现
+│   ├── inquiry_handler.h      # 第 9 周：主动询问的设备侧（答复与状态）
+│   ├── inquiry_handler.c      # 第 9 周：询问接收、按键答复、超时清理
+│   ├── http_client_util.h     # 第 9 周：从 command_handler 原样提取的 HTTP 工具
+│   ├── http_client_util.c     # GET 文本 / POST JSON（command_handler 与询问共用）
 │   └── idf_component.yml      # ESP-IDF 组件依赖（esp32-camera）
 ├── server/                    # 服务端代码
 │   ├── app.py                 # Flask 应用主程序
+│   ├── inquiry.py             # 第 9 周：主动询问的门控/状态机/冷却与 API
 │   ├── requirements.txt       # Python 依赖
 │   ├── test_week6.py          # 第 6 周功能自动化测试
 │   ├── test_week7.py          # 第 7 周功能自动化测试
 │   ├── test_week8.py          # 第 8 周功能自动化测试
+│   ├── test_week9.py          # 第 9 周功能自动化测试（含原始记录导出）
+│   ├── week9_evidence.json    # 第 9 周完整任务测试原始记录（提交物）
 │   ├── images/                # 采集到的环境图像（运行时生成）
 │   ├── vision/                # 视觉推理模块（第 8 周）
 │   │   ├── models.py          # 统一推理接口/教师基线/学生接入位/拒识逻辑
@@ -329,6 +339,94 @@ REQUIRE_REAL_MODEL=1 WEEK8_EVIDENCE=week8_evidence.json python test_week8.py
 - 不计算、不宣称模型准确率；`normal` 只表示“未被人工否定”；
 - 场景粗分类是规则后处理，不用于精确位置、危险程度或人身安全判断。
 
+### 画面不可用的主动询问（第 9 周）
+
+本周问题：画面无法使用时，系统能否主动询问「是否重拍」，并尊重用户选择？
+
+**事件来源（三源归一）**
+
+| 来源 | 触发点 | `trigger` |
+|---|---|---|
+| 设备 | `POST /api/image/<id>/fail` 上报 `blocked` | `device` |
+| 服务端 | 推理后 `usability` 为 `dark` / `blur` / `blocked` | `server` |
+| 模型 | 推理 `status` 为 `unavailable` / `decode_failed` | `model` |
+
+低分（`low_score`）与候选接近（`ambiguous`）属于"模型不确定"，不是"画面无法使用"，**不触发**询问。
+
+**状态机**
+
+```mermaid
+stateDiagram-v2
+    [*] --> asking: 事件 + 门控通过
+    asking --> confirmed: 重拍
+    asking --> declined: 不用了
+    asking --> dismissed: 其实可用（误判纠正）
+    asking --> expired: 30s 未答复
+    confirmed --> asking: 重拍仍不可用且 attempt<2
+    confirmed --> resolved: 重拍后画面可用
+    confirmed --> exhausted: attempt=2 仍不可用
+```
+
+**门控与冷却（默认值，环境变量可覆盖）**
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `INQUIRY_TIMEOUT_S` | 30 | 未答复自动按忽略处理，不重投、不重弹 |
+| `INQUIRY_GLOBAL_GAP_S` | 60 | 任意两条询问之间的最小间隔 |
+| `DECLINE_COOLDOWN_S` | 600 | 拒绝后同原因冷却（"拒绝后不反复打扰"的硬指标） |
+| `EXPIRE_COOLDOWN_S` | 300 | 超时后同原因冷却 |
+| `DISMISS_COOLDOWN_S` | 1800 | 判定"其实可用"后同原因冷却 |
+| `MAX_RETAKE` | 2 | 单张图重拍次数上限，超限转 `exhausted` 并建议走求助 |
+| `INQUIRY_ALLOW_REPLAY` | 0 | 回放来源是否参与（默认 0：回放只做演示/回归） |
+
+单飞行：同一时刻只允许一条未决询问；同一 `request_id` 只问一次；重拍产生的新任务归属原询问，不再新开一条。
+
+**反馈优先级**：求助回应（第 3 周，P0）> 主动询问（第 9 周，P1）> 普通状态提示（P2）。设备端 LED 由求助通道优先占用，求助空闲时才用双闪提示询问。
+
+**接口**
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/inquiry/pending` | 网页轮询当前未决询问（含剩余秒数与冷却参数） |
+| `POST /api/inquiry/<id>/answer` | `{"decision": "retake"\|"decline"\|"usable", "channel": "ui"\|"voice"\|"device_key", "mute": false}` |
+| `GET /api/inquiry/<id>` | 单条询问详情 |
+| `GET /api/inquiries?limit=20` | 最近询问列表（验收取证用） |
+| `GET /api/collect/pending` | 设备通道：新增 `type=inquiry`，复用既有轮询，设备 HTTP 次数不变 |
+
+答复语义：
+
+- `retake`：复用第 7 周图像任务流新建一次采集（`new_image_task`），结果回填原询问；
+- `decline`：登记冷却，同原因不再追问（`mute=true` 时长更长）；
+- `usable`：只记录误判纠正，不重拍，**不写**第 8 周人工纠错表（避免口径混用）。
+
+重复答复返回 409：只认第一个有效答复，后续答复仅在日志留痕，不重复提示。
+
+**三通道协同**：网页卡片（视觉）＋ 浏览器 TTS 播报与语音答复（语音）＋ 板载按键 / LED（实体）。实体：短按 = 重拍，长按 ≥800ms = 不用了；无询问时按键行为与第 3 周完全一致。
+
+**第 9 周验收与演示**
+
+```bash
+cd server
+venv\Scripts\python.exe test_week9.py    # 16 项；失败即非零退出
+# 原始记录写入 server/week9_evidence.json
+```
+
+演示顺序（约 5 分钟）：
+
+1. 正常采集：IMU 曲线照常，说明底层采集链路未被改动；
+2. 遮住镜头取图：网页出现"画面被遮挡，要重拍一张吗？"，同时 LED 双闪、语音播报；
+3. 点"重拍一张"：生成新的图像任务，设备真实取图，重拍结果回填原询问；
+4. 点"不用了"（或长按按键）：10 分钟内同类情况不再询问，连续遮挡不再打扰；
+5. 点"其实可用"：记录误判纠正，不重拍；
+6. 说明运行位置：模型跑在服务端（本地 ONNX 或教师 HTTP），设备端只做采集与按键，服务在本机 `:5000`。
+
+**证据口径**
+
+- `source=device` 的真机采集计入端到端证据；
+- `replay` 仅用于演示与自动化回归，默认不触发询问；
+- `test_week9.py` 中"模型不可用"用例为故障注入，证据里标注 `injected`；
+- 冷却参数在测试中被压到秒级，证据 `summary.config` 会如实记录，生产默认值见 `server/inquiry.py`。
+
 ## 排错指南
 
 ### ESP32 无法读取 IMU
@@ -349,6 +447,13 @@ REQUIRE_REAL_MODEL=1 WEEK8_EVIDENCE=week8_evidence.json python test_week8.py
 1. **检查服务器地址**：确认 `http_uploader.h` 中的 `SERVER_URL` 正确
 2. **检查防火墙**：确保服务器端口 5000 可访问
 3. **测试 API**：使用 curl 或 Postman 测试 `/api/imu` 接口
+
+### 画面不可用但没有出现询问
+
+1. **是否在冷却期**：`GET /api/inquiries?limit=5` 看最近一条的 `cooldown_until`；拒绝过同类情况后 10 分钟内不会再问
+2. **是否已有未决询问**：单飞行，已有一条 `asking` 时新事件不会新建
+3. **原因是否可询问**：低分 / 候选接近不触发询问（属于模型不确定）
+4. **来源是否为回放**：`INQUIRY_ALLOW_REPLAY=0`（默认）时回放图不触发
 
 ## 技术细节
 
