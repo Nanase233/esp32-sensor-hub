@@ -639,7 +639,26 @@ def get_pending_task():
             "created_at": img_row[2]
         })
 
-    # 2. 再检查 IMU 采集任务
+    # 2. 再检查第 9 周的主动询问（未投递过的 asking 询问，投递一次即标记）
+    #    顺序：image → inquiry → imu。询问不影响图像任务状态，仅复用同一条轮询通道。
+    inq = inquiry_mod.pending_for_device()
+    if inq:
+        conn.close()
+        return jsonify({
+            "request_id": inq["inquiry_id"],
+            "device_id": inq["device_id"],
+            "sensor": "camera",
+            "type": "inquiry",
+            "reason": inq["reason"],
+            "reason_label": inq["reason_label"],
+            "question": inq["question"],
+            "attempt_no": inq["attempt_no"],
+            "max_retake": inq["max_retake"],
+            "expires_in_s": inq["remaining_s"],
+            "created_at": inq["created_at"]
+        })
+
+    # 3. 再检查 IMU 采集任务
     c.execute("""
         SELECT request_id, device_id, sensor, created_at
         FROM collection_tasks
@@ -962,6 +981,21 @@ def create_image_task(device_id="esp32-s3-eye", source="device"):
     return request_id, now
 
 
+# ==================== 第 9 周：画面不可用的主动询问 ====================
+# 询问模块独立成表（image_inquiries），不改动上面四张已有表的结构；
+# 重拍复用上面的 create_image_task（唯一的取图入口），因此重拍走的是
+# 第 7 周原有的 pending→sent→received→captured 图像任务流，不新增设备任务类型。
+import inquiry as inquiry_mod  # noqa: E402  （放在函数定义之后，避免与 create_image_task 顺序耦合）
+
+inquiry_mod.configure(
+    DB_FILE,
+    create_image_task,
+    log=lambda msg, rid=None: logger.info(msg, extra={"request_id": rid or "-"}),
+)
+app.register_blueprint(inquiry_mod.bp)
+inquiry_mod.init_db()
+
+
 @app.route("/api/image", methods=["POST"])
 def create_image():
     """
@@ -1112,6 +1146,19 @@ def image_fail(request_id):
         return jsonify({"error": "任务状态不正确或不存在"}), 404
 
     logger.warning(f"图像采集失败: {status} - {error_msg}", extra={"request_id": request_id})
+
+    # 第 9 周：采集失败/遮挡也是一次"画面无法使用"事件，交给询问模块做门控。
+    # 失败只影响这条事件，不改变本周的失败上报语义（仍返回 blocked/failed）。
+    try:
+        inquiry_mod.on_unusable(
+            request_id,
+            "blocked" if status == "blocked" else "capture_failed",
+            trigger="device",
+        )
+    except Exception as e:
+        logger.warning(f"询问事件处理异常（不影响失败上报）: {e}",
+                       extra={"request_id": request_id})
+
     return jsonify({"status": status, "request_id": request_id})
 
 
@@ -1303,6 +1350,36 @@ def _store_inference(request_id, result):
     ))
     conn.commit()
     conn.close()
+
+    # 第 9 周：把推理结果接入询问状态。
+    #   画面不可用（dark/blur/blocked/模型不可用/解码失败）→ 可能是询问的触发源；
+    #   模型正常接受 → 若这张图是一次重拍，则关闭对应询问为 resolved。
+    # 低分 / 候选接近不在这里询问：那是"模型不确定"，不是"画面无法使用"。
+    try:
+        # 1) 画面客观可用（usability=clear）→ 若这张是一次重拍，关闭询问为 resolved。
+        #    低分/候选接近也属于"画面可用"，只是模型不确定，不应把重拍判成失败；
+        #    但 decode_failed / unavailable 的 usability 字段没有真实测量值（默认 clear），
+        #    因此必须同时限定 status，否则会把"解码失败"误判成"重拍成功"。
+        if result.status in ("ok", "rejected") and result.usability == "clear":
+            inquiry_mod.on_usable(request_id)
+
+        # 2) 画面不可用 / 模型不可用 → 触发新询问或推进已有询问的重拍计数
+        if result.is_rejected and result.rejected_reason in inquiry_mod.REASONS:
+            inquiry_mod.on_unusable(
+                request_id,
+                result.rejected_reason,
+                trigger="model" if result.status == "unavailable" else "server",
+                snapshot={
+                    "usability": result.usability,
+                    "usability_metrics": result.usability_metrics,
+                    "rejected_reason": result.rejected_reason,
+                    "model_version": result.model_version,
+                    "score": result.score,
+                },
+            )
+    except Exception as e:
+        logger.warning(f"询问事件处理异常（不影响推理结果）: {e}",
+                       extra={"request_id": request_id})
 
 
 def _run_image_inference(request_id, file_path):
@@ -1850,6 +1927,21 @@ def nl_query():
 
     logger.info(f"开始处理：{user_text}", extra={"request_id": request_id})
 
+    # 第 9 周：有待答复的询问时，"重拍 / 不用了 / 其实可用"先当成本次询问的答复，
+    # 不进入意图分类（避免新增意图枚举，改动第 6 周的意图契约）。
+    answered = inquiry_mod.try_answer_from_text(user_text, channel="ui")
+    if answered:
+        return jsonify({
+            "request_id": request_id,
+            "status": "answered",
+            "intent": "answer_inquiry",
+            "success": True,
+            "message": answered.get("message", "已答复"),
+            "inquiry": answered,
+            "run_location": "server",
+            "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+        }), 200
+
     # 1. 意图识别（LLM 优先，规则回退）
     intent_result = classify_intent(user_text)
     intent = intent_result.get("intent", "out_of_scope")
@@ -2132,6 +2224,21 @@ def voice_query():
             "source": "stt_silence",
             "stage": "stt"
         }), 400
+
+    # 第 9 周：语音答复协同——"重拍 / 不用了 / 其实可用"直接答复当前询问
+    answered = inquiry_mod.try_answer_from_text(text, channel="voice")
+    if answered:
+        return jsonify({
+            "input": text,
+            "status": "answered",
+            "intent": "answer_inquiry",
+            "success": True,
+            "message": answered.get("message", "已答复"),
+            "inquiry": answered,
+            "audio": None,
+            "tts_source": "not_needed",
+            "run_location": "server",
+        }), 200
 
     # 步骤 2: 复用 nl_query 逻辑
     intent_result = classify_intent(text)
