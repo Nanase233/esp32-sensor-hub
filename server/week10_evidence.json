@@ -1,0 +1,141 @@
+{
+  "summary": {
+    "week": 10,
+    "title": "区分传感器观测与当前状态：多来源独立状态与数据年龄",
+    "pass": 16,
+    "fail": 0,
+    "total": 16,
+    "config": {
+      "ttl": {
+        "imu_ms": 5000,
+        "camera_ms": 600000,
+        "link_ms": 10000
+      },
+      "status_vocabulary": [
+        "not_attempted",
+        "in_progress",
+        "ok",
+        "stale",
+        "failed",
+        "unknown_age",
+        "absent"
+      ],
+      "time_model": "observed_at = received_at - (send_uptime_ms - observed_uptime_ms)/1000"
+    },
+    "note": "测试使用固定 now 注入；数据库/图片均重定向临时目录，不影响生产数据。"
+  },
+  "cases": [
+    {
+      "case": "T1 迁移字段",
+      "pass": true,
+      "detail": "7 个新字段存在",
+      "attribution": "server",
+      "recorded_at": 1794536067.2003233
+    },
+    {
+      "case": "T1 迁移幂等且保留旧行",
+      "pass": true,
+      "detail": "迁移前后 1 -> 1",
+      "attribution": "server",
+      "recorded_at": 1794536067.2193997
+    },
+    {
+      "case": "T2 空库：未尝试/缺失，且无坐标",
+      "pass": true,
+      "detail": "imu=not_attempted camera=not_attempted link=not_attempted gnss=absent",
+      "attribution": "server",
+      "recorded_at": 1794536067.23043
+    },
+    {
+      "case": "T3 新鲜 IMU = ok，年龄按观测时间",
+      "pass": true,
+      "detail": "status=ok age=400 basis=device_transit transit=50",
+      "attribution": "time",
+      "recorded_at": 1794536067.2515273
+    },
+    {
+      "case": "T4 TTL 边界：=TTL 新鲜，>TTL 陈旧",
+      "pass": true,
+      "detail": "5.000s=ok 5.001s=stale",
+      "attribution": "time",
+      "recorded_at": 1794536067.3182654
+    },
+    {
+      "case": "T5 补传按原观测时间解释，不覆盖最新",
+      "pass": true,
+      "detail": "latest.ax=1.11 backfill.age=120000 imu.status=ok",
+      "attribution": "time",
+      "recorded_at": 1794536067.3718832
+    },
+    {
+      "case": "T6 失败保留旧观测，不写成设备故障",
+      "pass": true,
+      "detail": "status=failed rows=2->2",
+      "attribution": "device",
+      "recorded_at": 1794536067.3829215
+    },
+    {
+      "case": "T7 静默离线 = stale，不是 failed",
+      "pass": true,
+      "detail": "status=stale reason=device_offline",
+      "attribution": "time",
+      "recorded_at": 1794536067.4135106
+    },
+    {
+      "case": "T8 设备在采样但服务器未收到 = upload_stalled",
+      "pass": true,
+      "detail": "status=stale reason=upload_stalled",
+      "attribution": "interaction",
+      "recorded_at": 1794536067.4461515
+    },
+    {
+      "case": "T9 旧固件只有 timestamp = unknown_age",
+      "pass": true,
+      "detail": "status=unknown_age age=None",
+      "attribution": "time",
+      "recorded_at": 1794536067.4671984
+    },
+    {
+      "case": "T10 旧图 + 本次 blocked：failed 且保留旧图",
+      "pass": true,
+      "detail": "status=failed kind=blocked old_age=120000",
+      "attribution": "device",
+      "recorded_at": 1794536067.5243032
+    },
+    {
+      "case": "T11 链路在线但 IMU 未更新 = 对照可用",
+      "pass": true,
+      "detail": "链路在线（1.0 秒 前有请求），但加速度计已 30.0 秒 未更新；网络在线不等于数据新鲜。",
+      "attribution": "interaction",
+      "recorded_at": 1794536067.5578842
+    },
+    {
+      "case": "T12 GNSS 缺失：absent + 非故障 + 无坐标",
+      "pass": true,
+      "detail": "ESP32-S3-EYE 未配置 GNSS 模块；这是来源缺失，不是设备故障，也不提供任何坐标。",
+      "attribution": "server",
+      "recorded_at": 1794536067.5588875
+    },
+    {
+      "case": "T13 失败上报不改写原始观测/图片",
+      "pass": true,
+      "detail": "imu_data=1->1 hash_same=True",
+      "attribution": "server",
+      "recorded_at": 1794536067.569946
+    },
+    {
+      "case": "T14 /api/sources 契约完整",
+      "pass": true,
+      "detail": "HTTP=200 sources={'imu': 'failed', 'camera': 'not_attempted', 'link': 'ok', 'gnss': 'absent'}",
+      "attribution": "server",
+      "recorded_at": 1794536067.569946
+    },
+    {
+      "case": "T15 上报路径：滞留计入年龄，最新仍是最新",
+      "pass": true,
+      "detail": "age_basis=device_transit latest.ax=1.11",
+      "attribution": "time",
+      "recorded_at": 1794536067.600533
+    }
+  ]
+}

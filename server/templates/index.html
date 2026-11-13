@@ -791,6 +791,192 @@
         }
 
         .voice-confirm-dialog .btn-cancel:hover { background: #475569; }
+
+        /* ===== 第 10 周：多来源状态 / 数据年龄 ===== */
+        .sources-section {
+            grid-column: 1 / -1;
+        }
+
+        .sources-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        .sources-sub {
+            color: #64748b;
+            font-size: 0.78em;
+        }
+
+        .sources-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        @media (max-width: 1100px) {
+            .sources-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+
+        @media (max-width: 640px) {
+            .sources-grid { grid-template-columns: 1fr; }
+        }
+
+        .source-card {
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 10px;
+            padding: 14px;
+            min-width: 0;
+        }
+
+        .source-card.status-ok { border-color: #065f46; }
+        .source-card.status-stale { border-color: #92400e; }
+        .source-card.status-failed { border-color: #991b1b; }
+        .source-card.status-unknown_age { border-color: #6d28d9; }
+        .source-card.status-absent { border-color: #475569; }
+        .source-card.status-in_progress { border-color: #1d4ed8; }
+
+        .source-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .source-name {
+            font-weight: 700;
+            color: #f1f5f9;
+            font-size: 0.95em;
+        }
+
+        .source-badge {
+            font-size: 0.72em;
+            font-weight: 700;
+            border-radius: 999px;
+            padding: 3px 9px;
+            white-space: nowrap;
+        }
+
+        .source-badge.status-ok { background: #064e3b; color: #6ee7b7; }
+        .source-badge.status-stale { background: #78350f; color: #fcd34d; }
+        .source-badge.status-failed { background: #7f1d1d; color: #fca5a5; }
+        .source-badge.status-unknown_age { background: #4c1d95; color: #ddd6fe; }
+        .source-badge.status-absent { background: #334155; color: #cbd5e1; }
+        .source-badge.status-in_progress { background: #1e3a8a; color: #bfdbfe; }
+        .source-badge.status-not_attempted { background: #334155; color: #cbd5e1; }
+
+        .source-age-row {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .source-age {
+            font-size: 1.45em;
+            font-weight: 700;
+            color: #f8fafc;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .source-age-label {
+            font-size: 0.72em;
+            color: #64748b;
+        }
+
+        .source-meta {
+            margin-top: 8px;
+            color: #94a3b8;
+            font-size: 0.75em;
+            line-height: 1.55;
+        }
+
+        .source-msg {
+            margin-top: 8px;
+            color: #cbd5e1;
+            font-size: 0.78em;
+            line-height: 1.5;
+        }
+
+        .source-raw {
+            margin-top: 8px;
+            color: #64748b;
+            font-size: 0.74em;
+            font-variant-numeric: tabular-nums;
+            overflow-wrap: anywhere;
+        }
+
+        .source-thumb {
+            margin-top: 8px;
+            width: 100%;
+            max-height: 90px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 1px solid #334155;
+        }
+
+        .source-prov {
+            display: inline-block;
+            margin-top: 8px;
+            font-size: 0.68em;
+            color: #94a3b8;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            padding: 1px 6px;
+        }
+
+        .source-comparisons {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        @media (max-width: 900px) {
+            .source-comparisons { grid-template-columns: 1fr; }
+        }
+
+        .comparison-card {
+            background: #111c30;
+            border: 1px dashed #475569;
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .comparison-title {
+            font-size: 0.8em;
+            font-weight: 700;
+            color: #e2e8f0;
+            margin-bottom: 6px;
+        }
+
+        .comparison-msg {
+            font-size: 0.76em;
+            color: #94a3b8;
+            line-height: 1.5;
+        }
+
+        .data-banner {
+            background: #422006;
+            border: 1px solid #a16207;
+            color: #fde68a;
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin-bottom: 12px;
+            font-size: 0.8em;
+            line-height: 1.5;
+        }
+
+        .derived-note {
+            color: #64748b;
+            font-size: 0.7em;
+            font-weight: 400;
+            margin-left: 6px;
+        }
     </style>
 </head>
 <body>
@@ -804,11 +990,28 @@
 
     <!-- 主仪表盘 -->
     <div class="dashboard">
+        <!-- 第 10 周：多来源状态页（独立来源、观测/接收时间、数据年龄） -->
+        <section class="sources-section card" id="sources">
+            <div class="sources-head">
+                <div class="card-title" style="margin-bottom:0;">
+                    <span class="icon">🛰️</span> 来源状态与数据年龄
+                </div>
+                <div class="sources-sub">
+                    年龄按服务端时间计算；链路在线 ≠ 数据新鲜；定位模块未配置，不做补造。
+                </div>
+            </div>
+            <div class="sources-grid" id="sources-grid">
+                <div class="empty-text">正在读取来源状态...</div>
+            </div>
+            <div class="source-comparisons" id="source-comparisons"></div>
+        </section>
+
         <!-- 左列 -->
         <div class="col-left">
             <!-- 六轴实时数据 -->
             <div class="card">
                 <div class="card-title"><span class="icon">📊</span> 六轴传感器 (Acc / Gyro)</div>
+                <div id="imu-not-current" class="data-banner" style="display:none;"></div>
                 <div class="axis-section-title">加速度 (m/s²)</div>
                 <div class="axis-display">
                     <div class="axis-box ax">
@@ -824,7 +1027,7 @@
                         <div class="value" id="az-value">0.0000</div>
                     </div>
                 </div>
-                <div class="axis-section-title" style="margin-top:12px;">陀螺仪 (°/s)</div>
+                <div class="axis-section-title" style="margin-top:12px;">陀螺仪 (°/s)<span class="derived-note">估算，非传感器观测</span></div>
                 <div class="axis-display">
                     <div class="axis-box gx">
                         <div class="label">Gyro X</div>
@@ -936,7 +1139,7 @@
         <div class="col-right">
             <!-- 3D 姿态可视化 -->
             <div class="card">
-                <div class="card-title"><span class="icon">🧊</span> 3D 设备空间姿态</div>
+                <div class="card-title"><span class="icon">🧊</span> 3D 设备空间姿态<span class="derived-note">由加速度估算，yaw 会漂移</span></div>
                 <div class="attitude-display">
                     <div class="attitude-3d-container" id="attitude-3d"></div>
                     <div class="attitude-angles">
@@ -1114,6 +1317,171 @@
         let dataCount = 0;
         let lastTimestamp = 0;
 
+        // ==================== 第 10 周：多来源状态 ====================
+        let sourceReport = null;
+        let sourceByKey = {};
+        let serverOffsetMs = 0;
+
+        const SOURCE_STATUS_CLASSES = new Set([
+            'ok', 'stale', 'failed', 'unknown_age', 'absent', 'in_progress', 'not_attempted'
+        ]);
+        const ATTEMPT_TEXT = {
+            ok: '成功', fail: '失败', busy: '暂停', in_progress: '进行中',
+            none: '未尝试', unknown: '未知'
+        };
+        const AGE_BASIS_TEXT = {
+            device_transit: '观测时间（设备单调钟换算）',
+            server_received: '接收时间（无设备观测时刻）',
+            server_seen: '最近请求时间',
+            unknown: '缺少可比较的观测时间'
+        };
+
+        function sourceStatusClass(status) {
+            return SOURCE_STATUS_CLASSES.has(status) ? status : 'unknown_age';
+        }
+
+        function serverNowMs() {
+            return Date.now() + serverOffsetMs;
+        }
+
+        function fmtAgeMs(ageMs) {
+            if (ageMs === null || ageMs === undefined || Number.isNaN(Number(ageMs))) {
+                return '未知';
+            }
+            const ms = Math.max(0, Number(ageMs));
+            if (ms < 1000) return (ms / 1000).toFixed(1) + ' 秒';
+            const s = ms / 1000;
+            if (s < 60) return s.toFixed(1) + ' 秒';
+            if (s < 3600) return Math.floor(s / 60) + ' 分 ' + Math.floor(s % 60) + ' 秒';
+            return Math.floor(s / 3600) + ' 小时 ' + Math.floor((s % 3600) / 60) + ' 分';
+        }
+
+        function sourceAgeMs(src) {
+            if (src && src.observed_at) {
+                return Math.max(0, serverNowMs() - src.observed_at * 1000);
+            }
+            return src ? src.age_ms : null;
+        }
+
+        function fmtClock(epochSec) {
+            if (!epochSec) return '--';
+            const d = new Date(epochSec * 1000);
+            if (Number.isNaN(d.getTime())) return '--';
+            return d.toLocaleTimeString('zh-CN', {hour12: false}) +
+                '.' + String(d.getMilliseconds()).padStart(3, '0');
+        }
+
+        function sourceRawHtml(src) {
+            const raw = src.raw;
+            if (!raw) return '';
+            if (src.source === 'imu') {
+                return `<div class="source-raw">ax ${Number(raw.ax).toFixed(3)} · ay ${Number(raw.ay).toFixed(3)} · az ${Number(raw.az).toFixed(3)} m/s²</div>`;
+            }
+            if (src.source === 'camera') {
+                if (raw.image_url && raw.raw_available) {
+                    return `<img class="source-thumb" src="${esc(raw.image_url)}" alt="最近一次成功图像" onerror="this.style.display='none'">` +
+                        `<div class="source-raw">图像快照 · ${raw.size_bytes || '?'} 字节</div>`;
+                }
+                return `<div class="source-raw">原始图像不可用（已被保留策略清理）</div>`;
+            }
+            if (src.source === 'link') {
+                const fails = raw.imu_fail_count === null || raw.imu_fail_count === undefined ? '--' : raw.imu_fail_count;
+                return `<div class="source-raw">boot ${esc(raw.boot_id || '--')} · IMU 累计失败 ${esc(fails)} 次</div>`;
+            }
+            return '';
+        }
+
+        function sourceCard(src) {
+            const status = sourceStatusClass(src.status);
+            const age = sourceAgeMs(src);
+            const ageText = status === 'absent' ? '—' : fmtAgeMs(age);
+            const observed = src.observed_at
+                ? `观测约 ${fmtClock(src.observed_at)}`
+                : `无观测时刻`;
+            const received = src.received_at ? `接收 ${fmtClock(src.received_at)}` : '接收 --';
+            const transit = (src.transit_ms === null || src.transit_ms === undefined)
+                ? '传输 --' : `传输 ${src.transit_ms}ms`;
+            const attempt = src.last_attempt || {};
+            const attemptText = ATTEMPT_TEXT[attempt.result] || attempt.result || '未知';
+            const basis = AGE_BASIS_TEXT[src.age_basis] || src.age_basis || '未知';
+            const canCurrent = src.can_represent_current
+                ? '可作为当前状态'
+                : '不可作为当前状态';
+            return `<div class="source-card status-${status}">
+                <div class="source-head">
+                    <span class="source-name">${esc(src.label || src.source)}</span>
+                    <span class="source-badge status-${status}">${esc(src.status_label || src.status)}</span>
+                </div>
+                <div class="source-age-row">
+                    <span class="source-age" data-age-source="${esc(src.source)}">${ageText}</span>
+                    <span class="source-age-label">${esc(canCurrent)}</span>
+                </div>
+                <div class="source-meta">
+                    ${esc(observed)} · ${esc(received)}<br>
+                    ${esc(transit)} · 本次尝试 ${esc(attemptText)}<br>
+                    阈值 ${src.ttl_ms ? esc(src.ttl_ms) + 'ms' : '--'} · ${esc(basis)}
+                </div>
+                <div class="source-msg">${esc(src.user_message || '')}</div>
+                ${sourceRawHtml(src)}
+                <span class="source-prov">${src.provenance === 'replay' ? '教学回放' : '真实设备'}</span>
+            </div>`;
+        }
+
+        function renderSources() {
+            if (!sourceReport) return;
+            const grid = document.getElementById('sources-grid');
+            const list = sourceReport.sources || [];
+            grid.innerHTML = list.map(sourceCard).join('');
+
+            const comparisons = sourceReport.comparisons || {};
+            const items = Object.values(comparisons).filter(item => item && item.available);
+            const box = document.getElementById('source-comparisons');
+            if (!items.length) {
+                box.innerHTML = '<div class="empty-text">当前没有同时满足的对照案例；来源独立时不会强行拼成“当前状态”。</div>';
+            } else {
+                box.innerHTML = items.map(item => `<div class="comparison-card">
+                    <div class="comparison-title">${esc(item.title || '对照')}</div>
+                    <div class="comparison-msg">${esc(item.message || '')}</div>
+                </div>`).join('');
+            }
+
+            const imu = sourceByKey.imu;
+            const banner = document.getElementById('imu-not-current');
+            if (imu && imu.status !== 'ok') {
+                const ageText = fmtAgeMs(sourceAgeMs(imu));
+                banner.textContent = imu.status === 'not_attempted'
+                    ? '当前没有可用观测：' + (imu.user_message || '尚未采集。')
+                    : `以下为最近一次有效观测（${ageText} 前），不是当前状态。` +
+                      (imu.status === 'failed' ? ' 本次尝试失败。' : '');
+                banner.style.display = 'block';
+            } else {
+                banner.style.display = 'none';
+            }
+        }
+
+        function tickSourceAges() {
+            document.querySelectorAll('[data-age-source]').forEach(el => {
+                const src = sourceByKey[el.dataset.ageSource];
+                if (!src) return;
+                el.textContent = src.status === 'absent' ? '—' : fmtAgeMs(sourceAgeMs(src));
+            });
+        }
+
+        async function updateSources() {
+            try {
+                const response = await fetch('/api/sources');
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const data = await response.json();
+                serverOffsetMs = (Number(data.server_time) * 1000) - Date.now();
+                sourceReport = data;
+                sourceByKey = {};
+                (data.sources || []).forEach(src => { sourceByKey[src.source] = src; });
+                renderSources();
+            } catch (error) {
+                console.error('获取来源状态失败:', error);
+            }
+        }
+
         // 更新实时数据（六轴 + 姿态）
         async function updateData() {
             try {
@@ -1137,11 +1505,22 @@
                         window.attitudeMesh.rotation.z = THREE.MathUtils.degToRad(-(data.roll || 0));
                         window.attitudeMesh.rotation.y = THREE.MathUtils.degToRad(data.yaw || 0);
                     }
-                    document.getElementById('update-time').textContent = data.created_at;
-                    document.getElementById('status').innerHTML = '<span class="status-dot"></span>已连接';
+                    // 第 10 周：timestamp 是开机微秒，不能再当 Unix 秒转日期。
+                    const observedLabel = data.observed_at
+                        ? new Date(data.observed_at * 1000).toLocaleTimeString('zh-CN', {hour12: false})
+                        : (data.timestamp ? `T+${(Number(data.timestamp) / 1000000).toFixed(1)}s` : '--');
+                    // 接收时间同样用 epoch 转本地；created_at 是 SQLite 的 UTC 文本，直接显示会和观测差 8 小时。
+                    const receivedLabel = data.received_at
+                        ? new Date(data.received_at * 1000).toLocaleTimeString('zh-CN', {hour12: false})
+                        : (data.created_at || '--');
+                    document.getElementById('update-time').textContent =
+                        `${observedLabel}（观测） / ${receivedLabel}（接收）`;
+                    document.getElementById('status').innerHTML = '<span class="status-dot"></span>服务在线';
                     document.getElementById('status').className = 'status connected';
 
-                    const timeLabel = new Date(data.timestamp * 1000).toLocaleTimeString();
+                    const timeLabel = data.observed_at
+                        ? new Date(data.observed_at * 1000).toLocaleTimeString('zh-CN', {hour12: false})
+                        : (data.timestamp ? `T+${(Number(data.timestamp) / 1000000).toFixed(1)}s` : '--');
                     chart.data.labels.push(timeLabel);
                     chart.data.datasets[0].data.push(data.ax);
                     chart.data.datasets[1].data.push(data.ay);
@@ -1215,10 +1594,13 @@
         updateHelpList();
         loadSamplesCompare();   // 第 8 周：四类样例对照
         refreshInquiry();       // 第 9 周：待答复的主动询问
+        updateSources();        // 第 10 周：多来源状态与年龄
         setInterval(updateStats, 5000);
         setInterval(updateTaskList, 2000);
         setInterval(updateHelpList, 2000);
         setInterval(refreshInquiry, 1500);
+        setInterval(updateSources, 2000);
+        setInterval(tickSourceAges, 1000);
 
         // 远程采集
         async function collectOnce() {

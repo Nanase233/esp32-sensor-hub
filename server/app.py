@@ -34,6 +34,9 @@ from vision import (run_inference, HIGH_SCORE_THRESHOLD,
                     LOW_SCORE_THRESHOLD, AMBIGUOUS_MARGIN,
                     SCORE_NOTE, COARSE_NOTE)
 
+# 第 10 周：多来源状态/数据年龄（纯读聚合，不改原始观测）
+import source_state as source_state_mod
+
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
 
@@ -42,7 +45,8 @@ CORS(app)  # 允许跨域请求
 # 注意：request_id 通过 logger.info(..., extra={"request_id": ...}) 逐条传入。
 # 不要用 addFilter(RequestIdFilter(...)) —— 过滤器会累积且互相覆盖，
 # 并发时会把 A 请求的日志错标成 B 的 request_id。
-LOG_FILE = os.path.join(os.path.dirname(__file__), "interaction.log")
+# 允许测试/多实例通过 INTERACTION_LOG 指定日志文件，避免与正在运行的服务争用。
+LOG_FILE = os.environ.get("INTERACTION_LOG") or os.path.join(os.path.dirname(__file__), "interaction.log")
 
 # 使用独立 logger，不修改 root logger，避免影响 Flask/Werkzeug 日志
 logger = logging.getLogger("interaction")
@@ -256,6 +260,46 @@ BUCKET_NOTES = {
 os.makedirs(IMAGE_DIR, exist_ok=True)
 
 
+def _ensure_column(c, table: str, column: str, decl: str):
+    """幂等补列：旧库升级时不重建表、不丢历史数据。
+
+    表名/列名/类型都来自本文件内的常量，不接受外部输入。
+    """
+    existing = {row[1] for row in c.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+def _update_device_status(c, device_id, now, *, last_seen_at=None,
+                          boot_id=None, uptime_ms=None, imu_attempt=None,
+                          imu_error=None, clear_imu_error=False,
+                          imu_fail_count=None):
+    """更新设备心跳/采样状态（每设备一行）。
+
+    只记录状态，不写原始观测；失败不会覆盖 imu_data 的历史行。
+    imu_error 只在本次明确提供时更新，避免心跳把已有错误清空。
+    """
+    c.execute("""
+        INSERT OR IGNORE INTO device_status (device_id, last_seen_at, updated_at)
+        VALUES (?, ?, ?)
+    """, (device_id, now, now))
+    c.execute("""
+        UPDATE device_status
+        SET last_seen_at = COALESCE(?, last_seen_at),
+            boot_id = COALESCE(?, boot_id),
+            uptime_ms = COALESCE(?, uptime_ms),
+            imu_attempt = COALESCE(?, imu_attempt),
+            imu_fail_count = COALESCE(?, imu_fail_count),
+            updated_at = ?
+        WHERE device_id = ?
+    """, (last_seen_at, boot_id, uptime_ms, imu_attempt,
+          imu_fail_count, now, device_id))
+    if clear_imu_error:
+        c.execute("UPDATE device_status SET imu_error=NULL WHERE device_id=?", (device_id,))
+    elif imu_error is not None:
+        c.execute("UPDATE device_status SET imu_error=? WHERE device_id=?", (imu_error, device_id))
+
+
 def init_db():
     """初始化数据库"""
     conn = sqlite3.connect(DB_FILE)
@@ -278,6 +322,43 @@ def init_db():
     """)
     c.execute("""
         CREATE INDEX IF NOT EXISTS idx_request_id ON imu_data(request_id)
+    """)
+
+    # 第 10 周：观测时间、接收时间、传输时延与来源标记。
+    # observed_at 由服务器按设备单调时钟换算；旧行保持 NULL，不猜测 timestamp 单位。
+    for column, decl in [
+        ("observed_at", "REAL"),
+        ("received_at", "REAL"),
+        ("observed_uptime_ms", "INTEGER"),
+        ("send_uptime_ms", "INTEGER"),
+        ("boot_id", "TEXT"),
+        ("age_basis", "TEXT"),
+        ("provenance", "TEXT NOT NULL DEFAULT 'device'"),
+    ]:
+        _ensure_column(c, "imu_data", column, decl)
+
+    # 旧行的接收时间可以从 created_at（UTC 文本）回填；观测时间仍保持未知。
+    c.execute("""
+        UPDATE imu_data
+        SET received_at = CAST(strftime('%s', created_at) AS REAL)
+        WHERE received_at IS NULL AND created_at IS NOT NULL
+    """)
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_observed_at ON imu_data(observed_at)
+    """)
+
+    # 设备链路/采样状态（第 10 周）：复用 2s 轮询作心跳，不新增请求。
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS device_status (
+            device_id TEXT PRIMARY KEY,
+            last_seen_at REAL,
+            boot_id TEXT,
+            uptime_ms INTEGER,
+            imu_attempt TEXT,
+            imu_error TEXT,
+            imu_fail_count INTEGER DEFAULT 0,
+            updated_at REAL
+        )
     """)
 
     # 采集任务表
@@ -384,9 +465,41 @@ def index():
     return render_template("index.html")
 
 
+def _optional_uint(data: dict, key: str):
+    """读取可选的非负整数字段；类型不对返回 None，不因扩展字段拒绝旧客户端。"""
+    value = data.get(key)
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
+def _optional_boot_id(data: dict):
+    """boot_id 只保留短的十六进制串，避免脏数据进入状态页。"""
+    value = data.get("boot_id")
+    if not isinstance(value, str):
+        return None
+    value = value.strip().lower()
+    if not value or len(value) > 32:
+        return None
+    if any(ch not in "0123456789abcdef" for ch in value):
+        return None
+    return value
+
+
 @app.route("/api/imu", methods=["POST"])
 def receive_imu():
-    """接收 IMU 数据（支持 request_id 关联采集任务）"""
+    """接收 IMU 数据（支持 request_id 关联采集任务）。
+
+    第 10 周扩展（向后兼容）：
+      - 设备可上报 observed_uptime_ms / send_uptime_ms / boot_id；
+      - 服务器用"接收时间 - 观测到发送的滞留"换算观测时刻；
+      - 缺少新字段时 observed_at 保持 NULL，状态页显示"时效未知"，
+        绝不把旧固件的 timestamp 猜成 Unix 时间。
+    """
     data = request.get_json()
 
     if not data:
@@ -398,21 +511,49 @@ def receive_imu():
             return jsonify({"error": f"缺少字段：{field}"}), 400
 
     request_id = data.get("request_id")
+    device_id = str(data.get("device_id") or "esp32-s3-eye")[:32]
+    boot_id = _optional_boot_id(data)
+    observed_uptime_ms = _optional_uint(data, "observed_uptime_ms")
+    send_uptime_ms = _optional_uint(data, "send_uptime_ms")
 
-    # 存储到数据库
+    now = time.time()
+    observed_at = None
+    age_basis = "unknown"
+    transit_ms = None
+    if observed_uptime_ms is not None and send_uptime_ms is not None:
+        transit_ms = send_uptime_ms - observed_uptime_ms
+        if 0 <= transit_ms <= source_state_mod.MAX_TRANSIT_MS:
+            # 用设备自己的单调时钟测滞留，不要求设备与服务端对时。
+            observed_at = now - transit_ms / 1000.0
+            age_basis = "device_transit"
+
+    # 存储到数据库（原始 timestamp 保持原样，不重新解释）
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute(
-        "INSERT INTO imu_data (timestamp, ax, ay, az, request_id) VALUES (?, ?, ?, ?, ?)",
-        (data["timestamp"], data["ax"], data["ay"], data["az"], request_id)
-    )
+    c.execute("""
+        INSERT INTO imu_data (
+            timestamp, ax, ay, az, request_id, observed_at, received_at,
+            observed_uptime_ms, send_uptime_ms, boot_id, age_basis, provenance
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'device')
+    """, (data["timestamp"], data["ax"], data["ay"], data["az"], request_id,
+          observed_at, now, observed_uptime_ms, send_uptime_ms, boot_id, age_basis))
     data_id = c.lastrowid
+
+    # 成功上传同时证明链路可达；清空上一次读取错误。
+    _update_device_status(
+        c, device_id, now,
+        last_seen_at=now,
+        boot_id=boot_id,
+        uptime_ms=send_uptime_ms,
+        imu_attempt="ok",
+        clear_imu_error=True,
+    )
 
     # 如果有关联的采集任务，更新任务状态为已完成
     if request_id:
         c.execute(
             "UPDATE collection_tasks SET status='completed', completed_at=?, data_id=? WHERE request_id=? AND status IN ('sent','received')",
-            (time.time(), data_id, request_id)
+            (now, data_id, request_id)
         )
 
     conn.commit()
@@ -422,28 +563,38 @@ def receive_imu():
         "status": "success",
         "message": "数据接收成功",
         "timestamp": data["timestamp"],
-        "data_id": data_id
+        "data_id": data_id,
+        "observed_at": observed_at,
+        "received_at": now,
+        "age_basis": age_basis,
     }), 201
 
 
 @app.route("/api/imu/latest", methods=["GET"])
 def get_latest_imu():
-    """获取最新的 IMU 数据（含模拟陀螺仪和姿态角）"""
+    """获取最新的 IMU 数据（含模拟陀螺仪和姿态角）。
+
+    第 10 周：
+      - 按 observed_at（而不是插入 id）取最新，补传旧数据不会顶掉新数据；
+      - 返回观测时间/接收时间/年龄，前端不再把开机微秒当 Unix 时间；
+      - 陀螺仪/姿态仍保留兼容字段，但明确标记为"估算"。
+    """
     import math
     import random
     conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("""
-        SELECT timestamp, ax, ay, az, created_at
+        SELECT *
         FROM imu_data
-        ORDER BY id DESC
+        ORDER BY COALESCE(observed_at, received_at, 0) DESC, id DESC
         LIMIT 1
     """)
     row = c.fetchone()
     conn.close()
 
     if row:
-        ax, ay, az = row[1], row[2], row[3]
+        ax, ay, az = row["ax"], row["ay"], row["az"]
         # 基于加速度变化量估算陀螺仪（静止时趋近于零）
         global _prev_ax, _prev_ay, _prev_az, _prev_ts
         now = time.time()
@@ -463,12 +614,35 @@ def get_latest_imu():
         _yaw_estimate += gz * dt * 10  # 缩放系数使变化更明显
         _yaw_estimate = ((_yaw_estimate + 180) % 360) - 180  # 归一化到 [-180, 180]
         yaw = _yaw_estimate
+
+        observed_at = row["observed_at"]
+        received_at = row["received_at"]
+        if received_at is None:
+            received_at = source_state_mod._created_at_epoch(row["created_at"])
+        age_ms = None
+        if observed_at is not None:
+            age_ms = max(0.0, (now - observed_at) * 1000.0)
+        if age_ms is None:
+            freshness = "unknown_age"
+        elif age_ms > source_state_mod.ttl_config()["imu_ms"]:
+            freshness = "stale"
+        else:
+            freshness = "ok"
+
         return jsonify({
-            "timestamp": row[0],
+            "timestamp": row["timestamp"],
             "ax": ax, "ay": ay, "az": az,
             "gx": gx, "gy": gy, "gz": gz,
             "pitch": pitch, "roll": roll, "yaw": yaw,
-            "created_at": row[4]
+            "created_at": row["created_at"],
+            "observed_at": observed_at,
+            "received_at": received_at,
+            "age_ms": None if age_ms is None else round(age_ms),
+            "age_basis": row["age_basis"] or ("device_transit" if observed_at else "unknown"),
+            "freshness": freshness,
+            "is_stale": None if age_ms is None else bool(age_ms > source_state_mod.ttl_config()["imu_ms"]),
+            "derived": {"gyro": True, "attitude": True, "yaw": True},
+            "derived_note": "gx/gy/gz、pitch/roll/yaw 由加速度变化估算，仅用于展示，不是传感器观测；yaw 无磁力计会漂移。",
         })
     else:
         return jsonify({"error": "暂无数据"}), 404
@@ -481,24 +655,35 @@ def get_imu_history():
     limit = min(limit, 1000)  # 最多返回 1000 条
 
     conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("""
-        SELECT timestamp, ax, ay, az, created_at
+        SELECT *
         FROM imu_data
-        ORDER BY id DESC
+        ORDER BY COALESCE(observed_at, received_at, 0) DESC, id DESC
         LIMIT ?
     """, (limit,))
     rows = c.fetchall()
     conn.close()
 
+    now = time.time()
     data = []
     for row in rows:
+        observed_at = row["observed_at"]
+        age_ms = None
+        if observed_at is not None:
+            age_ms = max(0.0, (now - observed_at) * 1000.0)
         data.append({
-            "timestamp": row[0],
-            "ax": row[1],
-            "ay": row[2],
-            "az": row[3],
-            "created_at": row[4]
+            "timestamp": row["timestamp"],
+            "ax": row["ax"],
+            "ay": row["ay"],
+            "az": row["az"],
+            "created_at": row["created_at"],
+            "observed_at": observed_at,
+            "received_at": row["received_at"],
+            "age_ms": None if age_ms is None else round(age_ms),
+            "age_basis": row["age_basis"] or ("device_transit" if observed_at else "unknown"),
+            "provenance": row["provenance"],
         })
 
     return jsonify({"data": data, "count": len(data)})
@@ -524,6 +709,17 @@ def get_stats():
         "total_records": total,
         "latest_record": latest or "无"
     })
+
+
+@app.route("/api/sources", methods=["GET"])
+def get_sources():
+    """第 10 周：各来源独立状态、数据年龄与对照案例。
+
+    纯读接口：不修改原始观测，不清理过期数据。
+    """
+    return jsonify(source_state_mod.build_report(
+        DB_FILE, now=source_state_mod.now_epoch()
+    ))
 
 
 # ==================== 远程采集指令 API ====================
@@ -616,6 +812,28 @@ def get_pending_task():
     """
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+
+    # 第 10 周：复用 2s 轮询作设备心跳，不新增 HTTP 请求。
+    # 只接受状态码白名单，URL 参数不会直接拼进 SQL。
+    now = time.time()
+    device_id = (request.args.get("device_id") or "esp32-s3-eye")[:32]
+    imu_state = (request.args.get("imu") or "").lower()
+    imu_error = (request.args.get("err") or "").lower()
+    if imu_state in ("ok", "fail", "busy"):
+        fails = request.args.get("fails", type=int)
+        if fails is not None:
+            fails = max(0, min(int(fails), 10 ** 9))
+        _update_device_status(
+            c, device_id, now,
+            last_seen_at=now,
+            imu_attempt=imu_state,
+            imu_error=imu_error if imu_error in
+            ("none", "read", "timeout", "init", "camera_busy", "other") else None,
+            imu_fail_count=fails,
+        )
+    else:
+        _update_device_status(c, device_id, now, last_seen_at=now)
+    conn.commit()
 
     # 1. 先检查待执行的图像采集任务（仅 device 来源由设备执行，replay 仅用于回放演示）
     c.execute("""

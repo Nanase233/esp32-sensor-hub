@@ -26,6 +26,10 @@
 - ✅ 图像采集任务状态机（pending → sent → received → captured / failed）
 - ✅ IMU I2C 总线与摄像头 SCCB 时分复用，采集后自动恢复 IMU 采样
 - ✅ 主动询问的实体答复通道（第 9 周）：询问下发、LED 双闪、短按=重拍 / 长按=不用了
+- ✅ 多来源独立状态与数据年龄（第 10 周）：IMU / 摄像头 / 链路 / GNSS 缺失分开显示
+- ✅ 观测时间与接收时间分离：补传旧数据按原观测时间解释，不覆盖最新数据
+- ✅ 陈旧、失败、未尝试、缺失、时效未知五类状态与用户提示对照
+- ✅ GNSS 未配置明确标缺失，不生成任何坐标；失败/离线不写成设备故障
 
 ### 服务端
 - ✅ Flask REST API 接收数据
@@ -139,6 +143,8 @@ esp32-imu/
 │   ├── inquiry_handler.c      # 第 9 周：询问接收、按键答复、超时清理
 │   ├── http_client_util.h     # 第 9 周：从 command_handler 原样提取的 HTTP 工具
 │   ├── http_client_util.c     # GET 文本 / POST JSON（command_handler 与询问共用）
+│   ├── sampling_state.h       # 第 10 周：最近一次采样尝试/boot_id（只记录状态）
+│   ├── sampling_state.c       # 第 10 周：线程安全的采样状态实现
 │   └── idf_component.yml      # ESP-IDF 组件依赖（esp32-camera）
 ├── server/                    # 服务端代码
 │   ├── app.py                 # Flask 应用主程序
@@ -149,6 +155,9 @@ esp32-imu/
 │   ├── test_week8.py          # 第 8 周功能自动化测试
 │   ├── test_week9.py          # 第 9 周功能自动化测试（含原始记录导出）
 │   ├── week9_evidence.json    # 第 9 周完整任务测试原始记录（提交物）
+│   ├── source_state.py        # 第 10 周：来源状态/年龄/对照聚合（纯读）
+│   ├── test_week10.py         # 第 10 周时间处理与来源缺失测试
+│   ├── week10_evidence.json   # 第 10 周测试原始记录（提交物）
 │   ├── images/                # 采集到的环境图像（运行时生成）
 │   ├── vision/                # 视觉推理模块（第 8 周）
 │   │   ├── models.py          # 统一推理接口/教师基线/学生接入位/拒识逻辑
@@ -427,6 +436,138 @@ venv\Scripts\python.exe test_week9.py    # 16 项；失败即非零退出
 - `test_week9.py` 中"模型不可用"用例为故障注入，证据里标注 `injected`；
 - 冷却参数在测试中被压到秒级，证据 `summary.config` 会如实记录，生产默认值见 `server/inquiry.py`。
 
+### 区分传感器观测与当前状态（第 10 周）
+
+本周问题：定位、运动和网络信息不是同时到达，怎样避免把旧数据当成当前状态？
+
+本项目没有 GNSS，**不补造位置**；真实来源是 IMU、摄像头快照和网络链路。课程中的
+“旧位置 + 本次 no_fix”用“旧图 + 本次 blocked”做同构案例，“网络在线但位置未更新”
+用“链路在线 + IMU 陈旧”做真实案例。
+
+**来源与阈值**
+
+| source | 页面 | 性质 | 默认 TTL | 缺失/离线时 |
+|---|---|---|---|---|
+| `imu` | 加速度计 | 连续流 | `IMU_STALE_MS=5000` | 只标陈旧，不判故障 |
+| `camera` | 环境图像 | 快照 | `CAMERA_STALE_MS=600000` | 失败保留旧图 |
+| `link` | 网络链路 | 链路状态 | `LINK_OFFLINE_MS=10000` | 离线只表示无法确认 |
+| `gnss` | 定位 | 未配置 | — | 固定 `absent`，不返回坐标 |
+
+**三段时间与年龄**
+
+```text
+设备观测：observed_uptime_ms（qma7981_read_accel 返回后）
+设备发送：send_uptime_ms（HTTP 发出前）
+服务器接收：received_at（epoch 秒）
+
+transit_ms  = send_uptime_ms - observed_uptime_ms
+observed_at = received_at - transit_ms / 1000
+age_ms      = now - observed_at
+```
+
+- 补传 120 秒前的样本时，滞留时间会进入 `transit_ms`，年龄仍是 120 秒；
+- `/api/imu/latest` 按 `COALESCE(observed_at, received_at)` 取最新，补传旧行不会顶掉新行；
+- 旧固件没有新字段时 `observed_at=NULL`、状态为 `unknown_age`，**不猜测** `timestamp` 的单位；
+- 跨重启或 `transit_ms` 非法/超过 1 小时时同样标 `unknown_age`，不给出“新鲜”结论。
+
+**状态语义**
+
+| status | 含义 | 页面提示 |
+|---|---|---|
+| `not_attempted` | 从未尝试/从未收到 | 无法判断；没有数据不等于故障 |
+| `in_progress` | 图像任务进行中 | 正在采集，请稍候 |
+| `ok` | 最近成功且未超过 TTL | IMU 可作当前值；图像仍是快照；链路仅代表可达 |
+| `stale` | 超过 TTL、设备离线或上传停滞 | 已 X 秒未更新，不能当作当前状态 |
+| `failed` | 有明确失败证据（读失败/blocked/error/no_fix） | 本次失败；下面显示上次有效值，不代表现在 |
+| `unknown_age` | 缺少可比较的观测时间 | 时效未知，不能当作当前状态 |
+| `absent` | 来源未配置/硬件缺失 | 未配置此来源，不是设备故障 |
+
+硬规则：
+
+1. **静默不等于失败**：设备离线只标 `stale`，不写“设备故障”；
+2. **失败不覆盖旧观测**：`failed` 只更新尝试状态，`imu_data` 旧行和旧 JPEG 原样保留；
+3. **链路在线不等于数据新鲜**：`link.status=ok` 与 `imu.status=stale` 可以同时成立；
+4. **图像是快照**：`camera.ok` 只表示最近一次取图成功，不代表当前画面。
+
+**接口**
+
+`GET /api/sources`：
+
+```json
+{
+  "server_time": 1763000000.123,
+  "ttl": {"imu_ms": 5000, "camera_ms": 600000, "link_ms": 10000},
+  "sources": [
+    {
+      "source": "imu",
+      "status": "stale",
+      "status_reason": "upload_stalled",
+      "status_label": "陈旧",
+      "user_message": "设备仍在采样，但服务器已 12.3s 未收到新数据；不能当作当前状态。",
+      "can_represent_current": false,
+      "age_ms": 12300,
+      "age_basis": "device_transit",
+      "observed_at": 1762999987.0,
+      "received_at": 1762999987.02,
+      "transit_ms": 21,
+      "last_attempt": {"result": "ok"},
+      "last_success": {"age_ms": 12300},
+      "raw": {"ax": 0.12, "ay": -0.03, "az": 9.79},
+      "raw_ref": "imu_data:66846",
+      "provenance": "device"
+    }
+  ],
+  "comparisons": {
+    "old_but_failed": {"available": true, "message": "..."},
+    "link_ok_data_stale": {"available": true, "message": "..."}
+  }
+}
+```
+
+`/api/imu/latest` 新增 `observed_at / received_at / age_ms / age_basis / freshness /
+is_stale / derived / derived_note`；陀螺仪与姿态仍保留兼容字段，但明确标注“由加速度估算”。
+
+设备端心跳复用原有 2 秒轮询：
+
+```text
+GET /api/collect/pending?device_id=esp32-s3-eye&imu=ok|fail|busy&err=read&fails=N
+```
+
+不新增 HTTP 请求；`device_status` 只记录最近心跳与尝试结果。
+
+**前端**
+
+页面顶部新增“来源状态与数据年龄”区：
+
+- 四张卡分别显示状态、年龄、观测/接收时刻、传输时延、本次尝试、原始值；
+- 年龄每秒按服务端 `server_time` 递增，避免浏览器时钟偏差；
+- IMU 非 `ok` 时，六轴数值上方出现“最近一次有效观测，不是当前状态”横幅；
+- 下方自动展示两个对照：旧数据 + 本次失败、链路在线 + 数据未更新。
+
+**验收与演示**
+
+```bash
+cd server
+venv\Scripts\python.exe test_week10.py     # 16 项；失败即非零退出
+# 原始记录写入 server/week10_evidence.json
+```
+
+演示顺序（约 5 分钟）：
+
+1. 正常采样：IMU 卡 `ok`，年龄 <1s，`provenance=device`；
+2. 遮挡镜头取图：本次 `blocked`，旧图仍在，出现“旧图 + 本次失败”对照；
+3. 拔掉/遮挡 IMU：轮询上报 `fail`，IMU 卡 `failed`，旧值带年龄保留；
+4. 断开设备：10s 后链路和 IMU 变 `stale`，不显示“设备故障”；
+5. 补传一条 2 分钟前的样本：`/api/imu/latest` 不被覆盖，历史中该样本年龄为 2 分钟；
+6. 说明 GNSS 卡固定为“缺失”，系统没有任何经纬度字段。
+
+**证据口径**
+
+- `source=device` 的真实设备数据计入端到端证据；
+- `test_week10.py` 使用固定 `now` 注入与临时库，不替代真机复验；
+- 不计算、不宣称位置精度；GNSS 缺失与摄像头 blocked 都不写成设备故障；
+- TTL 只影响“能否当当前状态”，不删除历史观测。
+
 ## 排错指南
 
 ### ESP32 无法读取 IMU
@@ -470,18 +611,37 @@ venv\Scripts\python.exe test_week9.py    # 16 项；失败即非零退出
 - **协议**：HTTP POST
 - **格式**：JSON
 - **频率**：每 10 个样本上传一次（可配置）
-- **时间戳**：微秒级（esp_timer_get_time）
+- **时间戳**：观测时的开机微秒（`esp_timer_get_time()`，不是 Unix 时间）；第 10 周另带 `observed_uptime_ms` / `send_uptime_ms`，由服务端换算数据年龄
 
 ### 数据库设计
 
 ```sql
 CREATE TABLE imu_data (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp REAL NOT NULL,      -- 设备时间戳（微秒）
+    timestamp REAL NOT NULL,      -- 观测时开机微秒（非 Unix 时间）
     ax REAL NOT NULL,             -- X 轴加速度
     ay REAL NOT NULL,             -- Y 轴加速度
     az REAL NOT NULL,             -- Z 轴加速度
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP  -- 服务器接收时间
+    request_id TEXT,              -- 远程采集任务关联
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,  -- 服务器接收时间（UTC 文本）
+    observed_at REAL,             -- 第 10 周：观测时刻（epoch 秒，服务端换算）
+    received_at REAL,             -- 第 10 周：接收时刻（epoch 秒）
+    observed_uptime_ms INTEGER,   -- 第 10 周：设备观测开机毫秒
+    send_uptime_ms INTEGER,       -- 第 10 周：设备发送前开机毫秒
+    boot_id TEXT,                 -- 第 10 周：本次开机标识
+    age_basis TEXT,               -- 第 10 周：device_transit / unknown
+    provenance TEXT NOT NULL DEFAULT 'device'
+);
+
+CREATE TABLE device_status (
+    device_id TEXT PRIMARY KEY,
+    last_seen_at REAL,            -- 最近一次请求（2s 轮询/上传）
+    boot_id TEXT,
+    uptime_ms INTEGER,
+    imu_attempt TEXT,             -- ok / fail / busy / unknown
+    imu_error TEXT,               -- read / timeout / camera_busy ...
+    imu_fail_count INTEGER DEFAULT 0,
+    updated_at REAL
 );
 ```
 

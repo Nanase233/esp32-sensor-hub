@@ -25,6 +25,7 @@
 #include "qma7981.h"
 #include "image_capture.h"
 #include "inquiry_handler.h"
+#include "sampling_state.h"
 #include "esp_log.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
@@ -61,8 +62,15 @@ static esp_err_t poll_pending_command(pending_cmd_t *cmd)
     /* 默认按 IMU 任务处理，保持与原接口兼容 */
     strncpy(cmd->type, "imu", sizeof(cmd->type) - 1);
 
-    char url[128];
-    snprintf(url, sizeof(url), "%s/api/collect/pending", SERVER_BASE_URL);
+    /* 第 10 周：复用心跳上报 IMU 尝试状态，不新增 HTTP 请求。
+     * 参数只使用短代码，服务端按白名单解析。 */
+    char url[192];
+    snprintf(url, sizeof(url),
+             "%s/api/collect/pending?device_id=esp32-s3-eye&imu=%s&err=%s&fails=%lu",
+             SERVER_BASE_URL,
+             sampling_state_imu_attempt_code(),
+             sampling_state_imu_error_code(),
+             (unsigned long)sampling_state_imu_fail_count());
 
     char resp_buf[HTTP_RESP_BUF_SIZE];
     int read_len = http_util_get_text(url, resp_buf, sizeof(resp_buf));
@@ -163,14 +171,22 @@ static void execute_collect_command(const char *request_id)
     qma7981_data_t accel;
     esp_err_t ret = qma7981_read_accel(&accel);
     if (ret != ESP_OK) {
+        sampling_state_note_imu_fail(ret);
         ESP_LOGE(TAG, "IMU 读取失败");
         mark_failed(request_id, "IMU read failed");
         return;
     }
+    sampling_state_note_imu_ok();
 
-    /* 3. 携带 request_id 上传 */
+    /* 3. 携带 request_id 与观测/发送时间上传 */
     uint64_t timestamp_us = esp_timer_get_time();
-    ret = http_uploader_send_imu_with_request(&accel, timestamp_us, request_id);
+    imu_sample_meta_t meta = {
+        .observed_uptime_ms = timestamp_us / 1000,
+        .send_uptime_ms = (uint64_t)(esp_timer_get_time() / 1000),
+        .boot_id = sampling_state_boot_id(),
+    };
+    ret = http_uploader_send_imu_with_request_ex(&accel, timestamp_us,
+                                                 request_id, &meta);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "数据上传失败");
         mark_failed(request_id, "HTTP upload failed");

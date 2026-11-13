@@ -23,6 +23,7 @@
 #include "button_handler.h"
 #include "image_capture.h"
 #include "inquiry_handler.h"
+#include "sampling_state.h"
 
 static const char *TAG = "MAIN";
 
@@ -35,6 +36,9 @@ static const char *TAG = "MAIN";
 void app_main(void)
 {
     ESP_LOGI(TAG, "===== ESP32-S3-EYE IMU 数据采集 + HTTP 上传 =====");
+
+    /* 0. 生成本次开机的 boot_id，并初始化采样状态（第 10 周） */
+    sampling_state_init();
 
     /* 1. 初始化 QMA7981 */
     esp_err_t ret = qma7981_init(QMA7981_RANGE_2G);
@@ -79,14 +83,16 @@ void app_main(void)
     while (1) {
         /* 图像采集期间 I2C 总线被摄像头占用，暂停 IMU 采样（第 7 周） */
         if (image_capture_is_busy()) {
+            sampling_state_note_imu_busy();
             vTaskDelay(pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
             continue;
         }
 
         ret = qma7981_read_accel(&accel);
         if (ret == ESP_OK) {
-            /* 获取微秒级时间戳 */
+            /* 读取完成即观测时刻；微秒原样保留在 timestamp，毫秒用于年龄计算 */
             uint64_t timestamp_us = esp_timer_get_time();
+            sampling_state_note_imu_ok();
 
             /* 串口输出 */
             printf("[%06lu] ax=%.4f, ay=%.4f, az=%.4f m/s²\n",
@@ -96,7 +102,12 @@ void app_main(void)
             if (wifi_manager_is_connected()) {
                 upload_count++;
                 if (upload_count >= UPLOAD_BATCH_SIZE) {
-                    ret = http_uploader_send_imu(&accel, timestamp_us);
+                    imu_sample_meta_t meta = {
+                        .observed_uptime_ms = timestamp_us / 1000,
+                        .send_uptime_ms = (uint64_t)(esp_timer_get_time() / 1000),
+                        .boot_id = sampling_state_boot_id(),
+                    };
+                    ret = http_uploader_send_imu_ex(&accel, timestamp_us, &meta);
                     if (ret == ESP_OK) {
                         ESP_LOGI(TAG, "批次上传成功 (样本 #%lu)", sample_count);
                     }
@@ -106,6 +117,7 @@ void app_main(void)
 
             sample_count++;
         } else {
+            sampling_state_note_imu_fail(ret);
             ESP_LOGW(TAG, "读取失败，跳过本次采样");
         }
 
