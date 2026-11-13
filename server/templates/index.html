@@ -422,6 +422,40 @@
         }
         .image-frame img { max-width: 100%; display: block; }
 
+        /* ===== 第 9 周：画面不可用 → 主动询问卡片 ===== */
+        .inquiry-card {
+            background: #1c1917;
+            border: 1px solid #b45309;
+            border-left: 4px solid #f59e0b;
+            border-radius: 10px;
+            padding: 12px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .inquiry-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .inquiry-badge {
+            background: #78350f;
+            color: #fcd34d;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .inquiry-reason { color: #fcd34d; font-size: 13px; font-weight: 600; }
+        .inquiry-countdown { margin-left: auto; color: #94a3b8; font-size: 12px; }
+        .inquiry-question { color: #f1f5f9; font-size: 14px; line-height: 1.6; }
+        .inquiry-meta { color: #94a3b8; font-size: 12px; }
+        .inquiry-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .inquiry-mute {
+            color: #94a3b8;
+            font-size: 12px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .inquiry-hint { color: #6ee7b7; font-size: 12px; }
+
         /* ===== 第 8 周：推理结果反馈与样例对照 ===== */
         .image-result { display: flex; flex-direction: column; gap: 10px; }
         .result-card {
@@ -860,6 +894,25 @@
             <div class="card nl-full">
                 <div class="card-title"><span class="icon">📷</span> 环境图像（按需采集 · 视觉推理反馈）</div>
                 <div class="image-panel">
+                    <!-- 第 9 周：画面不可用 → 主动询问「是否重拍」（视觉卡片 + 语音播报） -->
+                    <div id="inquiry-card" class="inquiry-card" style="display:none">
+                        <div class="inquiry-head">
+                            <span class="inquiry-badge">主动询问</span>
+                            <span class="inquiry-reason" id="inquiry-reason">画面不可用</span>
+                            <span class="inquiry-countdown" id="inquiry-countdown"></span>
+                        </div>
+                        <div class="inquiry-question" id="inquiry-question"></div>
+                        <div class="inquiry-meta" id="inquiry-meta"></div>
+                        <div class="inquiry-actions">
+                            <button class="btn-primary" onclick="answerInquiry('retake')">重拍一张</button>
+                            <button onclick="answerInquiry('decline')">不用了</button>
+                            <button onclick="answerInquiry('usable')">其实可用</button>
+                            <label class="inquiry-mute">
+                                <input type="checkbox" id="inquiry-mute"> 本次不再询问
+                            </label>
+                        </div>
+                        <div class="inquiry-hint" id="inquiry-hint"></div>
+                    </div>
                     <div class="image-actions">
                         <button class="btn-primary" id="capture-image-btn" onclick="captureImage()">拍一张</button>
                         <button class="btn-primary" id="recapture-btn" style="display:none" onclick="captureImage()">重新采集</button>
@@ -1161,9 +1214,11 @@
         updateTaskList();
         updateHelpList();
         loadSamplesCompare();   // 第 8 周：四类样例对照
+        refreshInquiry();       // 第 9 周：待答复的主动询问
         setInterval(updateStats, 5000);
         setInterval(updateTaskList, 2000);
         setInterval(updateHelpList, 2000);
+        setInterval(refreshInquiry, 1500);
 
         // 远程采集
         async function collectOnce() {
@@ -1367,6 +1422,150 @@
                 btn.disabled = false;
                 if (recapture) recapture.disabled = false;
             }
+        }
+
+        // ==================== 第 9 周：画面不可用 → 主动询问「是否重拍」 ====================
+        // 询问由服务端的"画面不可用"事件产生（遮挡/过暗/模糊/采集失败/模型不可用），
+        // 前端只负责呈现与答复：
+        //   - 视觉通道：本卡片 + 倒计时
+        //   - 语音通道：浏览器自带 TTS 播报问句（不依赖服务端语音密钥）
+        //   - 实体通道：设备板载按键（短按重拍 / 长按不用了），见 main/inquiry_handler.c
+        // 三个通道共用同一接口，服务端只认第一个有效答复。
+        let currentInquiry = null;
+        let inquiryCountdown = null;
+
+        function speakInquiry(text) {
+            if (!text || !('speechSynthesis' in window)) return;
+            try {
+                window.speechSynthesis.cancel();
+                const u = new SpeechSynthesisUtterance(text);
+                u.lang = 'zh-CN';
+                u.rate = 1.0;
+                window.speechSynthesis.speak(u);
+            } catch (e) { /* 播报失败不影响卡片 */ }
+        }
+
+        async function refreshInquiry() {
+            try {
+                const resp = await fetch('/api/inquiry/pending');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                if (!data.inquiry) { hideInquiry(); return; }
+                renderInquiry(data.inquiry);
+            } catch (e) { /* 询问面板失败不影响其它面板 */ }
+        }
+
+        function inquiryTriggerLabel(trigger) {
+            return {device: '设备侧上报', server: '画面检查', model: '视觉服务'}[trigger] || trigger || '未知来源';
+        }
+
+        function renderInquiry(inq) {
+            const card = document.getElementById('inquiry-card');
+            if (!card) return;
+
+            // 同一条询问的同一轮次重复返回时不重复播报，避免"反复打扰"
+            const isNew = !currentInquiry
+                || currentInquiry.inquiry_id !== inq.inquiry_id
+                || currentInquiry.attempt_no !== inq.attempt_no;
+            currentInquiry = inq;
+
+            document.getElementById('inquiry-reason').textContent = inq.reason_label || '画面不可用';
+            document.getElementById('inquiry-question').textContent = inq.question || '';
+            const round = inq.attempt_no ? `第 ${inq.attempt_no} 次重拍后仍不可用` : '首次判定画面不可用';
+            const cap = (inq.max_retake || 2) - (inq.attempt_no || 0);
+            document.getElementById('inquiry-meta').textContent =
+                `触发来源：${inquiryTriggerLabel(inq.trigger)} · ${round} · 还可重拍 ${cap} 次`;
+            document.getElementById('inquiry-hint').textContent = '';
+            card.style.display = 'flex';
+
+            if (isNew) speakInquiry(inq.question);
+            startInquiryCountdown();
+        }
+
+        function startInquiryCountdown() {
+            if (inquiryCountdown) clearInterval(inquiryCountdown);
+            const el = document.getElementById('inquiry-countdown');
+            const tick = () => {
+                if (!currentInquiry || !el) return;
+                const left = Math.max(0, Math.round(currentInquiry.expires_at - Date.now() / 1000));
+                el.textContent = left > 0 ? `${left}s 内不答复将按忽略处理` : '已超时';
+                if (left <= 0) {
+                    clearInterval(inquiryCountdown);
+                    inquiryCountdown = null;
+                    setTimeout(refreshInquiry, 800);
+                }
+            };
+            tick();
+            inquiryCountdown = setInterval(tick, 1000);
+        }
+
+        function hideInquiry() {
+            const card = document.getElementById('inquiry-card');
+            if (!card) return;
+            card.style.display = 'none';
+            if (inquiryCountdown) { clearInterval(inquiryCountdown); inquiryCountdown = null; }
+            currentInquiry = null;
+        }
+
+        async function answerInquiry(decision) {
+            if (!currentInquiry) return;
+            const inq = currentInquiry;
+            const mute = decision === 'decline' && document.getElementById('inquiry-mute').checked;
+            const buttons = document.querySelectorAll('#inquiry-card button');
+            buttons.forEach(b => b.disabled = true);
+            try {
+                const resp = await fetch(`/api/inquiry/${inq.inquiry_id}/answer`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({decision, channel: 'ui', mute})
+                });
+                const r = await resp.json();
+
+                if (resp.status === 409) {
+                    // 已被其它通道（按键/语音）答复或已超时：不重复提示
+                    document.getElementById('inquiry-hint').textContent =
+                        '这条询问已由其它通道处理，本次答复不再生效';
+                    setTimeout(() => { hideInquiry(); refreshInquiry(); }, 1200);
+                    return;
+                }
+                if (!resp.ok) throw new Error(r.error || '答复失败');
+
+                document.getElementById('inquiry-hint').textContent = r.message || '已记录';
+                const retakeTask = (decision === 'retake') ? r.new_image_task : null;
+                hideInquiry();
+                if (retakeTask) await watchRetake(retakeTask);
+            } catch (e) {
+                document.getElementById('inquiry-hint').textContent = `答复失败：${e.message}`;
+            } finally {
+                buttons.forEach(b => b.disabled = false);
+            }
+        }
+
+        // 重拍任务走第 7 周原图像任务流：轮询该任务，成功后按原 request_id 载入"输入-结果-反馈"
+        async function watchRetake(requestId) {
+            const statusEl = document.getElementById('image-status');
+            statusEl.textContent = `重拍中… 请求 ${requestId}`;
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
+                await new Promise(r => setTimeout(r, 800));
+                try {
+                    const resp = await fetch(`/api/image/${requestId}`);
+                    const img = await resp.json();
+                    if (!resp.ok) continue;
+                    if (['captured', 'blocked', 'failed', 'timeout'].includes(img.status)) {
+                        if (img.status === 'captured') {
+                            statusEl.textContent =
+                                `重拍成功 · ${img.captured_at_text || ''} · ${img.size_bytes} 字节 · 请求 ${requestId}`;
+                            await loadImageResult(requestId);
+                        } else {
+                            statusEl.textContent =
+                                `重拍${imageStatusText(img.status, img.error_msg)} · 请求 ${requestId}`;
+                        }
+                        return;
+                    }
+                } catch (e) { /* 继续轮询 */ }
+            }
+            statusEl.textContent = `重拍超时 · 请求 ${requestId}`;
         }
 
         // ==================== 第 8 周：视觉推理结果反馈与人工纠错 ====================
