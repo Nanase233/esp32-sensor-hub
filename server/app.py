@@ -37,6 +37,9 @@ from vision import (run_inference, HIGH_SCORE_THRESHOLD,
 # 第 10 周：多来源状态/数据年龄（纯读聚合，不改原始观测）
 import source_state as source_state_mod
 
+# 第 11 周：多源证据组织交互上下文（纯读规则引擎，不改原始观测）
+import context_engine as context_mod
+
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
 
@@ -454,6 +457,29 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_feedback_request ON human_feedbacks(request_id)
     """)
 
+    # 上下文解释 trace（第 11 周）：保留证据来源、更新时间、规则版本与冲突样例。
+    # 只新增表，不修改任何已有表结构。
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS context_traces (
+            trace_id TEXT PRIMARY KEY,
+            question TEXT NOT NULL,
+            topic TEXT,
+            rule_version TEXT NOT NULL,
+            generated_at REAL NOT NULL,
+            answer TEXT,
+            facts_json TEXT,
+            pending_json TEXT,
+            followup_json TEXT,
+            layers_json TEXT,
+            conflicts_json TEXT,
+            provenance TEXT NOT NULL DEFAULT 'device'
+        )
+    """)
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_context_generated
+        ON context_traces(generated_at)
+    """)
+
     conn.commit()
     conn.close()
     print("[DB] 数据库初始化完成")
@@ -720,6 +746,52 @@ def get_sources():
     return jsonify(source_state_mod.build_report(
         DB_FILE, now=source_state_mod.now_epoch()
     ))
+
+
+# ==================== 第 11 周：交互上下文 API ====================
+
+@app.route("/api/context", methods=["POST"])
+def build_context_api():
+    """根据多源证据回答一个上下文问题，并保存 trace。
+
+    请求体：{"question": "我现在在动吗？"}
+    纯读原始观测；只新增 context_traces，便于验收时出示冲突样例。
+    """
+    data = request.get_json(silent=True) or {}
+    question = str(data.get("question") or "").strip()
+    if not question:
+        return jsonify({"error": "请输入问题"}), 400
+    if len(question) > context_mod.MAX_QUESTION_LEN:
+        return jsonify({
+            "error": f"问题过长（最多 {context_mod.MAX_QUESTION_LEN} 字）"
+        }), 400
+
+    try:
+        result = context_mod.build_context(DB_FILE, question)
+        context_mod.save_trace(DB_FILE, result)
+    except Exception as e:
+        logger.warning(f"上下文解释失败：{e}", extra={"request_id": "-"})
+        return jsonify({"error": "上下文解释暂时不可用"}), 500
+
+    return jsonify(result), 200
+
+
+@app.route("/api/context/traces", methods=["GET"])
+def get_context_traces():
+    """最近上下文解释；only_conflict=1 时只返回冲突样例（验收取证用）。"""
+    limit = request.args.get("limit", 20, type=int)
+    only_conflict = request.args.get("only_conflict", "0").lower() in ("1", "true", "yes")
+    traces = context_mod.list_traces(DB_FILE, limit=limit, only_conflict=only_conflict)
+    return jsonify({"traces": traces, "count": len(traces)})
+
+
+@app.route("/api/context/traces/<trace_id>", methods=["GET"])
+def get_context_trace(trace_id):
+    """单条 trace 回放：规则版本、事实来源、更新时间与冲突都在里面。"""
+    trace = context_mod.get_trace(DB_FILE, trace_id)
+    if trace is None:
+        return jsonify({"error": "未找到该 trace"}), 404
+    return jsonify(trace)
 
 
 # ==================== 远程采集指令 API ====================
@@ -2156,6 +2228,34 @@ def nl_query():
             "success": True,
             "message": answered.get("message", "已答复"),
             "inquiry": answered,
+            "run_location": "server",
+            "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+        }), 200
+
+    # 第 11 周：明确的上下文问句先路由到证据引擎。
+    # 只放窄白名单（我在动吗 / 我现在在哪 / 现在安全吗 / 你知道什么），
+    # 不改变第 4 周查询、第 7 周取图命令的行为。
+    context_topic = context_mod.match_question(user_text)
+    if context_topic:
+        try:
+            context_result = context_mod.build_context(DB_FILE, user_text)
+            context_mod.save_trace(DB_FILE, context_result)
+        except Exception as e:
+            logger.warning(f"上下文解释失败：{e}", extra={"request_id": request_id})
+            return jsonify({
+                "request_id": request_id,
+                "status": "error",
+                "message": "上下文解释暂时不可用",
+            }), 500
+        return jsonify({
+            "request_id": request_id,
+            "input": user_text,
+            "intent": "context_query",
+            "intent_source": "rules",
+            "reasoning": f"白名单命中上下文主题：{context_topic}",
+            "success": True,
+            "message": context_result["answer"],
+            "context": context_result,
             "run_location": "server",
             "processing_time_ms": round((time.time() - start_time) * 1000, 2),
         }), 200

@@ -1,0 +1,188 @@
+{
+  "summary": {
+    "week": 11,
+    "title": "根据多源证据组织交互上下文：事实/派生/决策三层与追问",
+    "pass": 20,
+    "fail": 0,
+    "total": 20,
+    "config": {
+      "ttl": {
+        "imu_ms": 5000,
+        "camera_ms": 600000,
+        "link_ms": 10000
+      },
+      "rule_version": "week11-rules@1.0.0",
+      "thresholds": {
+        "motion_window_s": 5.0,
+        "motion_min_samples": 4,
+        "motion_std_still": 0.2,
+        "motion_std_moving": 0.4,
+        "motion_norm_still": 0.5,
+        "motion_evidence_high_samples": 8,
+        "scene_recheck_s": 120,
+        "score_note": "模型分数未经校准，不等于正确率"
+      },
+      "rule_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R8",
+        "R9"
+      ],
+      "decisions": {
+        "D1": "回答，无需追问",
+        "D2": "回答，并追问是否重拍",
+        "D3": "回答，并追问设备采样状态",
+        "D4": "拒绝位置结论，并澄清问题",
+        "D5": "无法确认，引导查看来源"
+      }
+    },
+    "note": "测试使用固定 now 注入与临时库；数据库/图片/日志均重定向，不影响生产数据。"
+  },
+  "cases": [
+    {
+      "case": "T1 规则版本、9 条规则与阈值快照",
+      "pass": true,
+      "detail": "version=week11-rules@1.0.0 rules=9",
+      "attribution": "rules",
+      "recorded_at": 1795397107.1902814
+    },
+    {
+      "case": "T2 空库：无法确认 + 引导查看来源 + 无坐标",
+      "pass": true,
+      "detail": "decision=D5 followup=sources",
+      "attribution": "server",
+      "recorded_at": 1795397107.1912796
+    },
+    {
+      "case": "T3 静止样本 → 静止，证据充分度 high",
+      "pass": true,
+      "detail": "state=still n=8 age=500",
+      "attribution": "device",
+      "recorded_at": 1795397107.2984269
+    },
+    {
+      "case": "T3b 恒定的安装/标定偏差不算移动",
+      "pass": true,
+      "detail": "state=still std=0.0 norm_delta=10.358",
+      "attribution": "device",
+      "recorded_at": 1795397107.3742914
+    },
+    {
+      "case": "T4 大幅波动 → 有活动",
+      "pass": true,
+      "detail": "state=moving std=2.0",
+      "attribution": "device",
+      "recorded_at": 1795397107.4629261
+    },
+    {
+      "case": "T5 样本不足 → 无法判断 + 追问采样",
+      "pass": true,
+      "detail": "reason=insufficient_samples followup=collect",
+      "attribution": "rules",
+      "recorded_at": 1795397107.507925
+    },
+    {
+      "case": "T6 12s 无新样本：无法判断 + 链路在线冲突",
+      "pass": true,
+      "detail": "reason=no_samples conflicts=['link_ok_data_stale']",
+      "attribution": "time",
+      "recorded_at": 1795397107.5409238
+    },
+    {
+      "case": "T7 位置问题：无定位来源，旧快照不包装成当前位置",
+      "pass": true,
+      "detail": "decision=D4 conflicts=['stale_snapshot_inference']",
+      "attribution": "interaction",
+      "recorded_at": 1795397107.5878258
+    },
+    {
+      "case": "T8 遮挡：无法确认 + 不判危险 + 重拍追问",
+      "pass": true,
+      "detail": "decision=D2 conflicts=['old_snapshot_plus_failure']",
+      "attribution": "interaction",
+      "recorded_at": 1795397107.636826
+    },
+    {
+      "case": "T9 模型结果标为推断，带版本/分数，不写成观测",
+      "pass": true,
+      "detail": "facts=1 label=computer keyboard",
+      "attribution": "model",
+      "recorded_at": 1795397107.7597618
+    },
+    {
+      "case": "T10 模型拒识 → 未能确认 + 重拍追问，标签不进入回答",
+      "pass": true,
+      "detail": "decision=D2",
+      "attribution": "model",
+      "recorded_at": 1795397107.8155365
+    },
+    {
+      "case": "T11 运动问题优先补采样，不被旧画面劫持",
+      "pass": true,
+      "detail": "followup=collect",
+      "attribution": "rules",
+      "recorded_at": 1795397107.8478866
+    },
+    {
+      "case": "T12 安全类问题：只描述画面，不给安全/危险结论",
+      "pass": true,
+      "detail": "最近一次成功取图在 30.0 秒 前，模型标签“mask”（模型分数 0.550，模型分数未经校准，不等于正确率，模型版",
+      "attribution": "interaction",
+      "recorded_at": 1795397107.900893
+    },
+    {
+      "case": "T13 trace 保存规则版本/冲突，only_conflict 可取回",
+      "pass": true,
+      "detail": "HTTP=200 traces=1",
+      "attribution": "server",
+      "recorded_at": 1795397107.9878116
+    },
+    {
+      "case": "T14 上下文解释只读：原始表与图片哈希不变",
+      "pass": true,
+      "detail": "counts={'imu_data': 1, 'image_records': 1, 'inference_results': 1} hash_same=True",
+      "attribution": "server",
+      "recorded_at": 1795397107.9986308
+    },
+    {
+      "case": "T15 replay 来源保留在事实与 trace 汇总中",
+      "pass": true,
+      "detail": "camera_prov=replay summary=mixed",
+      "attribution": "replay",
+      "recorded_at": 1795397108.05195
+    },
+    {
+      "case": "T16 白名单：上下文问句命中，取图/查询命令不命中",
+      "pass": true,
+      "detail": "whitelist ok",
+      "attribution": "interaction",
+      "recorded_at": 1795397108.05195
+    },
+    {
+      "case": "T17 nl_query：上下文问句走 context_query",
+      "pass": true,
+      "detail": "HTTP=200 intent=context_query",
+      "attribution": "interaction",
+      "recorded_at": 1795397108.091491
+    },
+    {
+      "case": "T18 /api/context 参数校验",
+      "pass": true,
+      "detail": "empty=400 long=400 missing=404",
+      "attribution": "server",
+      "recorded_at": 1795397108.092493
+    },
+    {
+      "case": "T19 无快照的位置问题：保留待确认，不补造位置",
+      "pass": true,
+      "detail": "decision=D4",
+      "attribution": "interaction",
+      "recorded_at": 1795397108.1244931
+    }
+  ]
+}

@@ -977,6 +977,261 @@
             font-weight: 400;
             margin-left: 6px;
         }
+
+        /* ===== 第 11 周：多源证据交互上下文 ===== */
+        .context-section {
+            grid-column: 1 / -1;
+        }
+
+        .context-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .context-sub {
+            color: #64748b;
+            font-size: 0.78em;
+            line-height: 1.5;
+        }
+
+        .context-presets {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 12px 0 10px;
+        }
+
+        .context-presets button,
+        .context-input-row button,
+        .ctx-actions button {
+            background: #1e293b;
+            color: #cbd5e1;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 7px 12px;
+            cursor: pointer;
+            font-size: 0.8em;
+        }
+
+        .context-presets button:hover,
+        .ctx-actions button:hover {
+            border-color: #3b82f6;
+            color: #e2e8f0;
+        }
+
+        .context-input-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .context-input-row input {
+            flex: 1;
+            min-width: 0;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #e2e8f0;
+            padding: 9px 12px;
+            font-size: 0.85em;
+        }
+
+        .context-answer {
+            margin-top: 12px;
+            border-top: 1px dashed #334155;
+            padding-top: 12px;
+        }
+
+        .ctx-summary {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+        }
+
+        .ctx-decision {
+            background: #1e3a8a;
+            color: #bfdbfe;
+            border-radius: 999px;
+            padding: 3px 10px;
+            font-size: 0.72em;
+            font-weight: 700;
+        }
+
+        .ctx-version {
+            color: #64748b;
+            font-size: 0.72em;
+        }
+
+        .ctx-conclusion {
+            background: #0b1220;
+            border-left: 3px solid #3b82f6;
+            border-radius: 6px;
+            padding: 10px 12px;
+            color: #e2e8f0;
+            font-size: 0.86em;
+            line-height: 1.65;
+        }
+
+        .ctx-conflicts {
+            margin-top: 10px;
+            display: grid;
+            gap: 6px;
+        }
+
+        .ctx-conflict {
+            background: #422006;
+            border: 1px solid #a16207;
+            color: #fde68a;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 0.78em;
+            line-height: 1.55;
+        }
+
+        .ctx-conflict b {
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .ctx-block {
+            margin-top: 12px;
+        }
+
+        .ctx-block-title {
+            color: #94a3b8;
+            font-size: 0.74em;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            margin-bottom: 6px;
+        }
+
+        .ctx-fact {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 6px 0;
+            border-bottom: 1px dashed #1e293b;
+            font-size: 0.79em;
+            line-height: 1.55;
+        }
+
+        .ctx-fact:last-child {
+            border-bottom: none;
+        }
+
+        .ctx-tag {
+            flex: 0 0 auto;
+            border-radius: 4px;
+            padding: 1px 6px;
+            font-size: 0.72em;
+            font-weight: 700;
+            margin-top: 1px;
+        }
+
+        .ctx-tag.kind-observation { background: #064e3b; color: #6ee7b7; }
+        .ctx-tag.kind-derived { background: #1e3a8a; color: #bfdbfe; }
+        .ctx-tag.kind-inference { background: #4c1d95; color: #ddd6fe; }
+        .ctx-tag.kind-absence { background: #334155; color: #cbd5e1; }
+
+        .ctx-fact-text {
+            flex: 1;
+            color: #cbd5e1;
+        }
+
+        .ctx-fact-meta {
+            flex: 0 0 auto;
+            color: #64748b;
+            font-size: 0.9em;
+            white-space: nowrap;
+        }
+
+        .ctx-pending {
+            color: #cbd5e1;
+            font-size: 0.79em;
+            line-height: 1.55;
+            padding: 3px 0;
+        }
+
+        .ctx-hint {
+            color: #64748b;
+        }
+
+        .ctx-followup {
+            margin-top: 12px;
+            background: #111c30;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 10px 12px;
+        }
+
+        .ctx-followup.none {
+            color: #64748b;
+            font-size: 0.78em;
+        }
+
+        .ctx-question {
+            color: #f1f5f9;
+            font-size: 0.86em;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .ctx-why {
+            color: #64748b;
+            font-size: 0.75em;
+            line-height: 1.5;
+        }
+
+        .ctx-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .ctx-layers {
+            margin-top: 12px;
+            border-top: 1px dashed #334155;
+            padding-top: 10px;
+        }
+
+        .ctx-layers summary {
+            cursor: pointer;
+            color: #93c5fd;
+            font-size: 0.78em;
+        }
+
+        .ctx-layers table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 8px;
+            font-size: 0.74em;
+            color: #cbd5e1;
+        }
+
+        .ctx-layers th,
+        .ctx-layers td {
+            border: 1px solid #334155;
+            padding: 6px 8px;
+            text-align: left;
+            vertical-align: top;
+            line-height: 1.5;
+        }
+
+        .ctx-layers th {
+            background: #111c30;
+            color: #94a3b8;
+        }
+
+        .ctx-footer {
+            margin-top: 10px;
+            color: #475569;
+            font-size: 0.7em;
+        }
     </style>
 </head>
 <body>
@@ -1004,6 +1259,34 @@
                 <div class="empty-text">正在读取来源状态...</div>
             </div>
             <div class="source-comparisons" id="source-comparisons"></div>
+        </section>
+
+        <!-- 第 11 周：根据多源证据回答 + 追问（事实 / 待确认 / 三层对照） -->
+        <section class="context-section card" id="context">
+            <div class="context-head">
+                <div class="card-title" style="margin-bottom:0;">
+                    <span class="icon">🧭</span> 上下文解释与追问
+                </div>
+                <div class="context-sub">
+                    只回答证据能支撑的内容；定位缺失不补造；遮挡不等于危险；一次至多一条追问。
+                </div>
+            </div>
+            <div class="context-presets">
+                <button onclick="askContext('我现在在动吗？')">我在动吗</button>
+                <button onclick="askContext('我现在在哪？')">我在哪</button>
+                <button onclick="askContext('最近画面是什么？')">最近画面</button>
+                <button onclick="askContext('现在安全吗？')">安全吗</button>
+                <button onclick="askContext('你现在知道什么？')">你知道什么</button>
+            </div>
+            <div class="context-input-row">
+                <input id="context-input" type="text" maxlength="200"
+                       placeholder="例如：我在动吗 / 最近画面是什么 / 我现在在哪"
+                       onkeydown="if(event.key==='Enter')askContextFromInput()">
+                <button class="btn-primary" onclick="askContextFromInput()">解释</button>
+            </div>
+            <div id="context-answer" class="context-answer">
+                <div class="empty-text">还没有上下文解释；点击上面的问题开始。</div>
+            </div>
         </section>
 
         <!-- 左列 -->
@@ -1071,6 +1354,7 @@
                         <button onclick="quickNl('查看上次数据')">查看上次数据</button>
                         <button onclick="quickNl('重新采集一次')">重新采集一次</button>
                         <button onclick="quickNl('最近一次加速度是多少')">最近加速度</button>
+                        <button onclick="quickNl('我在动吗？')">我在动吗</button>
                         <button onclick="quickNl('今天天气如何')">越界测试</button>
                     </div>
 
@@ -1479,6 +1763,157 @@
                 renderSources();
             } catch (error) {
                 console.error('获取来源状态失败:', error);
+            }
+        }
+
+        // ==================== 第 11 周：上下文解释与追问 ====================
+        // 证据由服务端 context_engine 生成：原始观测 / 派生状态 / 交互决策三层；
+        // 前端只负责呈现，不自行补造位置、危险或模型结论。
+        let lastContextQuestion = null;
+        let lastContext = null;
+
+        const CONTEXT_KIND_TEXT = {
+            observation: '观测',
+            derived: '派生',
+            inference: '推断',
+            absence: '缺失'
+        };
+
+        function askContextFromInput() {
+            const input = document.getElementById('context-input');
+            if (input) askContext(input.value);
+        }
+
+        async function askContext(question) {
+            question = (question || '').trim();
+            if (!question) return;
+            lastContextQuestion = question;
+
+            const box = document.getElementById('context-answer');
+            box.innerHTML = '<div class="empty-text">正在根据现有证据解释...</div>';
+            try {
+                const resp = await fetch('/api/context', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({question: question})
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+                renderContext(data);
+            } catch (e) {
+                console.error('上下文解释失败:', e);
+                box.innerHTML = `<div class="empty-text">解释失败：${esc(e.message)}</div>`;
+            }
+        }
+
+        function contextFactHtml(fact) {
+            const kind = fact.kind || 'absence';
+            const text = CONTEXT_KIND_TEXT[kind] || kind;
+            const meta = [
+                fact.source,
+                fact.age_ms == null ? '年龄未知' : fmtAgeMs(fact.age_ms),
+                fact.rule_id,
+                fact.provenance === 'replay' ? '回放' : '真机'
+            ].filter(Boolean).join(' · ');
+            return `<div class="ctx-fact">
+                <span class="ctx-tag kind-${esc(kind)}">${esc(text)}</span>
+                <span class="ctx-fact-text">${esc(fact.text)}</span>
+                <span class="ctx-fact-meta">${esc(meta)}</span>
+            </div>`;
+        }
+
+        function contextLayerRows(facts) {
+            const groups = [
+                ['原始观测', facts.filter(f => f.kind === 'observation')],
+                ['派生状态', facts.filter(f => f.kind === 'derived')],
+                ['模型推断', facts.filter(f => f.kind === 'inference')],
+                ['缺失 / 待确认', facts.filter(f => f.kind === 'absence')]
+            ];
+            return groups.map(([name, items]) => {
+                const content = items.length
+                    ? items.map(f => `<div>${esc(f.text)}</div>`).join('')
+                    : '—';
+                const meta = items.length
+                    ? items.map(f => `${esc(f.source)} ${f.observed_at ? esc(fmtClock(f.observed_at)) : '—'}`).join('<br>')
+                    : '—';
+                return `<tr><td>${name}</td><td>${content}</td><td>${meta}</td></tr>`;
+            }).join('');
+        }
+
+        function renderContext(data) {
+            lastContext = data;
+            const box = document.getElementById('context-answer');
+            const facts = data.facts || [];
+            const pending = data.pending || [];
+            const followup = data.followup;
+            const conflicts = data.conflicts || [];
+            const decision = data.decision || {};
+
+            const conflictsHtml = conflicts.length
+                ? `<div class="ctx-conflicts">` + conflicts.map(c =>
+                    `<div class="ctx-conflict"><b>冲突 · ${esc(c.title)}</b>${esc(c.message)}</div>`
+                  ).join('') + `</div>`
+                : '';
+
+            const factsHtml = facts.length
+                ? facts.map(contextFactHtml).join('')
+                : '<div class="empty-text">没有可用事实。</div>';
+
+            const pendingHtml = pending.length
+                ? `<div class="ctx-block"><div class="ctx-block-title">待确认</div>` +
+                  pending.map(p =>
+                    `<div class="ctx-pending"><b>${esc(p.text)}</b>：${esc(p.reason)}` +
+                    `<span class="ctx-hint">（${esc(p.how_to_confirm)}）</span></div>`
+                  ).join('') + `</div>`
+                : '';
+
+            const followupHtml = followup
+                ? `<div class="ctx-followup">
+                     <div class="ctx-block-title">追问</div>
+                     <div class="ctx-question">${esc(followup.ask)}</div>
+                     <div class="ctx-why">${esc(followup.why)}</div>
+                     <div class="ctx-actions">` +
+                   (followup.options || []).map(o =>
+                     `<button onclick="contextAction('${esc(o.action)}')">${esc(o.label)}</button>`
+                   ).join('') + `</div></div>`
+                : `<div class="ctx-followup none">没有需要追加确认的问题。</div>`;
+
+            box.innerHTML = `
+                <div class="ctx-summary">
+                    <span class="ctx-decision">${esc(decision.id || '')} · ${esc(decision.label || '')}</span>
+                    <span class="ctx-version">${esc(data.topic_label || '')} · 规则 ${esc(data.rule_version || '')} · trace ${esc(data.trace_id || '')}</span>
+                </div>
+                <div class="ctx-conclusion">${esc(data.answer || '')}</div>
+                ${conflictsHtml}
+                <div class="ctx-block"><div class="ctx-block-title">已知事实</div>${factsHtml}</div>
+                ${pendingHtml}
+                ${followupHtml}
+                <details class="ctx-layers">
+                    <summary>三层数据对照（原始观测 / 派生状态 / 交互决策）</summary>
+                    <table>
+                        <thead><tr><th>层</th><th>内容</th><th>来源 / 时间</th></tr></thead>
+                        <tbody>${contextLayerRows(facts)}</tbody>
+                    </table>
+                </details>
+                <div class="ctx-footer">
+                    规则版本 ${esc(data.rule_version || '')} · 生成 ${esc(data.generated_at_text || '')} ·
+                    来源 ${esc(data.provenance || '')} · 定位 ${data.location && data.location.available ? '可用' : '缺失（不补造）'}
+                </div>
+            `;
+        }
+
+        async function contextAction(action) {
+            if (action === 'capture') {
+                await captureImage();
+                if (lastContextQuestion) askContext(lastContextQuestion);
+            } else if (action === 'collect') {
+                quickNl('重新采集一次');
+            } else if (action === 'sources') {
+                const el = document.getElementById('sources');
+                if (el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+            } else if (action === 'dismiss') {
+                const box = document.querySelector('.ctx-followup');
+                if (box) box.innerHTML = '<div class="ctx-block-title">追问已收起</div>';
             }
         }
 
@@ -2410,6 +2845,17 @@
                     if (result.status === 'cancelled') {
                         addNlMessage('任务已取消', 'error');
                         isProcessing = false;
+                        return;
+                    }
+
+                    // 第 11 周：上下文问句直接呈现“回答 + 证据 + 追问”
+                    if (result.intent === 'context_query' && result.context) {
+                        addNlMessage(esc(result.message || ''),
+                            'assistant',
+                            `上下文 · ${esc(result.context.topic_label || '')} | 规则 ${esc(result.context.rule_version || '')}`);
+                        renderContext(result.context);
+                        const section = document.getElementById('context');
+                        if (section) section.scrollIntoView({behavior: 'smooth', block: 'start'});
                         return;
                     }
 
