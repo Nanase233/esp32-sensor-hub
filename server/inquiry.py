@@ -10,11 +10,12 @@
        - 服务端：vision.check_usability 判 dark / blur / blocked     （trigger=server）
        - 模型：status=unavailable / decode_failed                    （trigger=model）
 
-  2. 门控 G1–G5：决定「这一次是否值得打扰用户」
+  2. 门控 G1–G6：决定「这一次是否值得打扰用户」
        G1 原因在已知集合内（低分 / 候选接近不算"画面无法使用"，不询问）
        G2 来源是设备真机采集（replay 只在显式开启时参与，避免把回放当真实证据）
        G3 同一时刻只允许一条未决询问（单飞行 one-in-flight）
        G4 不在全局间隔 / 同原因冷却窗口内
+       G6 用户显式偏好未压掉本条提醒（第 12 周新增，见 reminder_pref.py）
        G5 同一 request_id 未询问过；重拍产生的新 request_id 归属原询问，不新开一条
        通道可用性不单独探测，由 30s 超时（expired）兜底，避免依赖虚假在线信号。
 
@@ -28,13 +29,24 @@
       ├──其实可用──→ dismissed（只记录误判纠正，不重拍、不写第 8 周纠错表）
       └──30s 未答──→ expired（按忽略处理，不重投、不重弹）
 
+  第 12 周在本模块上只加两件事（有限反馈规则与显式偏好的落库都在 reminder_pref）：
+
+       * G6 偏好门：询问创建前先问一次"用户是否已经说过别问"；
+       * 答复映射 F1–F4：重拍=confirm（撤销同事件"稍后"）、不用了=ignore（可按
+         本轮/该类原因/这条事件/这张图记录显式偏好）、其实可用=correct（该类原因
+         静音、时长与误判冷却同口径）、稍后再说=snooze（该事件到期前不再打扰）。
+         未显式给出 scope/feedback/mute 时行为与第 9 周完全一致——第 9 周的记录级
+         冷却就是"默认策略"，偏好是叠加在它之上的显式策略，清除偏好=回到默认策略。
+
 设计约束（与既有代码的分工）：
 
   * 不新增设备任务类型：重拍直接复用 app.create_image_task()，走第 7 周原图像任务流；
   * 不改第 7 周 image_records 状态机、不改第 8 周 inference_results / human_feedbacks；
   * 询问投递复用设备既有的 GET /api/collect/pending（type=inquiry），不新增轮询任务，
     设备端 HTTP 请求次数不变；
-  * 冷却参数全部可用环境变量覆盖，便于自动化测试用秒级参数验证「拒绝后不反复打扰」。
+  * 冷却参数全部可用环境变量覆盖，便于自动化测试用秒级参数验证「拒绝后不反复打扰」；
+  * 第 12 周只加一道 G6 门与三个可空列（event_key / session_id / config_version），
+    状态机、通道投递、重拍链路一律不改。
 """
 
 import os
@@ -44,6 +56,11 @@ import uuid
 import logging
 
 from flask import Blueprint, jsonify, request
+
+# 第 12 周：显式提醒偏好与配置版本（偏好的唯一权威）。
+# 本模块只调用它的只读判定（check_gate）与计数写入（record_event），
+# 反向不依赖：reminder_pref 不知道询问状态机的存在。
+import reminder_pref as pref
 
 # ==================== 可调参数（环境变量可覆盖，便于测试缩短到秒级） ====================
 # 未答复超时：到点置 expired，按忽略处理，不重投、不重弹
@@ -83,10 +100,25 @@ NON_INQUIRY_REASONS = {"low_score", "ambiguous"}
 DECISIONS = {"retake", "decline", "usable"}
 CHANNELS = {"ui", "device_key", "voice"}
 
+# 第 12 周 G6 偏好门的命中代码（reminder_pref.check_gate 的返回码）。
+# 单独列出是为了把"被显式偏好压掉"与"被默认冷却压掉"区分统计。
+PREF_GATE_CODES = {"session_muted", "reason_muted", "event_muted",
+                   "request_muted", "event_snoozed"}
+
+# 第 12 周有限反馈规则：decision → 默认反馈类型（仅作展示口径，不改变第 9 周语义）
+FEEDBACK_BY_DECISION = {"retake": "confirm", "decline": "ignore", "usable": "correct"}
+
+# 第 12 周：询问答复允许携带的反馈类型（reminder_pref.FEEDBACKS 的子集）。
+# revoke/rollback/params 等属于配置操作，不由询问通道表达。
+ANSWER_FEEDBACKS = {"confirm", "correct", "ignore", "snooze", "restore_default"}
+
 # 语音/文字答复的关键词（规则匹配，先判"可用"再判"拒绝"，避免"不用重拍"被误判为重拍）
 USABLE_WORDS = ("其实可以", "其实可用", "看得清", "这张可以", "这张就行", "不用重拍", "没问题")
 DECLINE_WORDS = ("不用了", "不用", "算了", "不拍了", "不要了", "不需要")
 RETAKE_WORDS = ("重拍", "再拍", "重新拍", "再来一张", "再取一张", "换一张")
+# 第 12 周新增：F4"稍后"。动作上仍是一次 decline（既不重拍也不标记可用），
+# 区别只在答复时带上 feedback="snooze"，把偏好压到这条事件上而不是原因上。
+SNOOZE_WORDS = ("稍后", "稍等", "待会", "等会儿", "过一会", "晚点")
 
 bp = Blueprint("inquiry", __name__)
 
@@ -137,6 +169,13 @@ def _connect():
 
 # ==================== 建表 ====================
 
+def _ensure_column(c, table, column, decl):
+    """幂等补列（与 app._ensure_column 同一口径）：已存在则跳过，不改已有列语义。"""
+    existing = {r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing:
+        c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def init_db():
     """创建询问表（幂等）。独立成表，不改动已有的四张表结构。"""
     conn = _connect()
@@ -167,6 +206,15 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_inquiry_status ON image_inquiries(status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_inquiry_request ON image_inquiries(request_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_inquiry_retake ON image_inquiries(retake_request_id)")
+
+    # 第 12 周增量列（幂等补列，只增不改，第 9 周已有行为完全不受影响）：
+    #   event_key      —— 事件签名（request_id + reason），重复提醒计数的唯一口径
+    #   session_id     —— 该询问所属的"本轮"（服务端进程一轮）
+    #   config_version —— 创建询问时生效的偏好配置版本，供前后对照
+    _ensure_column(c, "image_inquiries", "event_key", "TEXT")
+    _ensure_column(c, "image_inquiries", "session_id", "TEXT")
+    _ensure_column(c, "image_inquiries", "config_version", "INTEGER")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_inquiry_event ON image_inquiries(event_key)")
     conn.commit()
     conn.close()
 
@@ -175,7 +223,8 @@ def init_db():
 
 _COLUMNS = ("inquiry_id, request_id, retake_request_id, device_id, source, trigger, reason, "
             "question, status, attempt_no, decision, decision_channel, created_at, answered_at, "
-            "expires_at, delivered_at, cooldown_until, usability_snapshot, note")
+            "expires_at, delivered_at, cooldown_until, usability_snapshot, note, "
+            "event_key, session_id, config_version")
 
 
 def _row_to_dict(row):
@@ -183,7 +232,8 @@ def _row_to_dict(row):
         return None
     (inquiry_id, request_id, retake_request_id, device_id, source, trigger, reason,
      question, status, attempt_no, decision, decision_channel, created_at, answered_at,
-     expires_at, delivered_at, cooldown_until, snapshot, note) = row
+     expires_at, delivered_at, cooldown_until, snapshot, note,
+     event_key, session_id, config_version) = row
     label, _ = REASONS.get(reason, (reason, ""))
     remaining = max(0, int(round(expires_at - _now()))) if expires_at else 0
     return {
@@ -211,6 +261,11 @@ def _row_to_dict(row):
         "cooldown_remaining_s": max(0, int(round((cooldown_until or 0) - _now()))),
         "usability_snapshot": snapshot,
         "note": note,
+        # 第 12 周：事件签名 / 所属本轮 / 当时的配置版本（前端与验收取证用）
+        "event_key": event_key,
+        "session_id": session_id,
+        "config_version": config_version,
+        "feedback": FEEDBACK_BY_DECISION.get(decision),
     }
 
 
@@ -323,8 +378,13 @@ def _reason_cooldown(reason):
     return row[0] or 0.0
 
 
-def _gate(request_id, reason, source):
-    """门控 G1–G5。返回 None 表示通过，否则返回未通过原因的代码。"""
+def _gate(request_id, reason, source, event_key=None):
+    """门控 G1–G6。返回 None 表示通过，否则返回未通过原因的代码。
+
+    第 12 周新增的 G6 放在 G4（默认冷却）之后、G5 之前：
+    先按第 9 周的默认策略判"值不值得打扰"，再看用户是否已经显式说过"别问"，
+    两种抑制分开计数，才能做"修改前后重复提醒次数"的对照。
+    """
     now = _now()
 
     # G1 原因必须是"画面无法使用"类
@@ -350,6 +410,13 @@ def _gate(request_id, reason, source):
     if now < _reason_cooldown(reason):
         return "reason_cooldown"
 
+    # G6 第 12 周：用户显式偏好（本轮静音 / 该类原因静音 / 这条事件静音或稍后）
+    if event_key is None:
+        event_key = pref.event_key_for(request_id, reason)
+    hit = pref.check_gate(event_key, reason, request_id)
+    if hit:
+        return hit["code"]
+
     # G5 同一 request_id 已经问过（重拍结果由 retake_request_id 归属原询问）
     if _find_by_request(request_id):
         return "already_asked"
@@ -370,6 +437,7 @@ def on_unusable(request_id, reason, trigger="server", snapshot=None):
     :return: 新建/更新的询问 dict，或被门控拦下时 {"suppressed": 原因}
     """
     sweep_expired()
+    event_key = pref.event_key_for(request_id, reason)
 
     # 1. 重拍结果回填：新图的失败归到原询问，不新开一条
     retake = _find_by_retake(request_id)
@@ -382,14 +450,26 @@ def on_unusable(request_id, reason, trigger="server", snapshot=None):
     # 2. 幂等：同一张图只问一次
     existing = _find_by_request(request_id)
     if existing:
+        # 第 12 周：同一事件重放（重复上报 / 回放二次导入）仍计一次"观测"，
+        # 但绝不重弹提醒 —— 这就是"同一事件重放不重复触发"的验收口径。
+        pref.record_event(event_key, reason, request_id, outcome="suppressed",
+                          code="already_asked", inquiry_id=existing["inquiry_id"])
         return existing
 
     source, device_id = _image_source(request_id)
-    blocked_by = _gate(request_id, reason, source)
+    blocked_by = _gate(request_id, reason, source, event_key)
     if blocked_by:
         _emit(f"事件未触发询问（{blocked_by}）: request={request_id} reason={reason}",
               request_id)
-        return {"suppressed": blocked_by, "request_id": request_id, "reason": reason}
+        # 被压掉的事件同样计数；命中 G6 时把具体偏好一并留证，便于前端解释"为什么没问你"
+        hit = pref.check_gate(event_key, reason, request_id) if blocked_by in PREF_GATE_CODES else None
+        pref.record_event(event_key, reason, request_id, outcome="suppressed",
+                          code=blocked_by, pref_id=hit["pref_id"] if hit else None)
+        return {"suppressed": blocked_by, "request_id": request_id, "reason": reason,
+                "event_key": event_key,
+                "preference": ({k: hit[k] for k in ("pref_id", "code", "detail", "scope",
+                                                    "feedback", "remaining_s", "until")}
+                               if hit else None)}
 
     label, question = REASONS[reason]
     inquiry_id = "inq-" + uuid.uuid4().hex[:10]
@@ -399,12 +479,18 @@ def on_unusable(request_id, reason, trigger="server", snapshot=None):
     c.execute("""
         INSERT INTO image_inquiries
         (inquiry_id, request_id, device_id, source, trigger, reason, question, status,
-         attempt_no, created_at, expires_at, usability_snapshot)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'asking', 0, ?, ?, ?)
+         attempt_no, created_at, expires_at, usability_snapshot,
+         event_key, session_id, config_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'asking', 0, ?, ?, ?, ?, ?, ?)
     """, (inquiry_id, request_id, device_id, source, trigger, reason, question,
-          now, now + INQUIRY_TIMEOUT_S, _snapshot_text(snapshot)))
+          now, now + INQUIRY_TIMEOUT_S, _snapshot_text(snapshot),
+          event_key, pref.SESSION_ID, pref.current_version()))
     conn.commit()
     conn.close()
+
+    # 第 12 周：真的发出了提醒，才计入 trigger_count
+    pref.record_event(event_key, reason, request_id, outcome="triggered",
+                      inquiry_id=inquiry_id)
 
     _emit(f"主动询问已创建: {inquiry_id} reason={reason} trigger={trigger} "
           f"（{INQUIRY_TIMEOUT_S:.0f}s 未答复将过期）", request_id)
@@ -458,13 +544,21 @@ def on_usable(request_id):
 
 # ==================== 答复 ====================
 
-def answer(inquiry_id, decision, channel="ui", mute=False):
+def answer(inquiry_id, decision, channel="ui", mute=False, feedback=None,
+           scope=None, snooze_s=None):
     """处理一次答复。
 
-    :param decision: retake / decline / usable
+    :param decision: retake / decline / usable（第 9 周契约，未改动）
     :param channel: ui / device_key / voice（只用于留证，不改变语义）
     :param mute: 拒绝时是否"本次不再询问"（同原因长冷却）
+    :param feedback: 第 12 周显式反馈类型（confirm/correct/ignore/snooze/restore_default）；
+                     不给时按 decision 推导，且**不写任何偏好**
+    :param scope: 第 12 周偏好作用域（session/event_reason/event_key/request_id）
+    :param snooze_s: feedback="snooze" 时的稍后时长
     :return: (payload, http_status)
+
+    第 12 周的有限反馈规则（F1–F5）只在调用方**显式**给出 mute/feedback/scope 时
+    才落地为偏好；三者都不给时行为与第 9 周逐字节一致，保证既有验收不受影响。
     """
     sweep_expired()
 
@@ -499,6 +593,14 @@ def answer(inquiry_id, decision, channel="ui", mute=False):
         payload["message"] = f"已为你重拍（第 {payload['attempt_no']} 次）"
         payload["new_image_task"] = request_id
         payload["new_image_created_at"] = created_at
+        # F1 confirm：采纳提醒 = 该事件上的"稍后再说"自动失效（没有则不写，不刷配置历史）
+        if inquiry.get("event_key"):
+            revoked, _ = pref.revoke_by_key(
+                "event_key", inquiry["event_key"], feedback="confirm", channel=channel,
+                note="用户选择重拍，该事件的'稍后'偏好自动失效")
+            if revoked.get("revoked"):
+                payload["snooze_revoked"] = revoked["revoked"]
+                payload["config_version"] = revoked["version"]
         return payload, 200
 
     if decision == "decline":
@@ -510,6 +612,11 @@ def answer(inquiry_id, decision, channel="ui", mute=False):
               f"{'（本次不再询问）' if mute else ''}", inquiry["request_id"])
         payload = _get(inquiry_id)
         payload["message"] = "好的，不再重拍；同类情况暂时不会再打扰你"
+        recorded = _record_feedback_preference(
+            inquiry, channel, mute=mute, feedback=feedback, scope=scope, snooze_s=snooze_s)
+        if recorded:
+            payload["preference"] = recorded
+            payload["message"] = payload["message"] + recorded.get("hint", "")
         return payload, 200
 
     # decision == "usable"：系统误判纠正。只改询问记录，不写第 8 周人工纠错表。
@@ -522,7 +629,91 @@ def answer(inquiry_id, decision, channel="ui", mute=False):
     payload = _get(inquiry_id)
     payload["message"] = "已记录：这张图可用，本次不重拍"
     payload["misjudged"] = True
+    # F2 correct：显式给出 feedback/scope 时，把"其实可用"落成可查看、可清除的原因级静音
+    explicit = feedback or scope
+    recorded = _record_feedback_preference(
+        inquiry, channel, mute=False,
+        feedback=(feedback or "correct") if explicit else None,
+        scope=scope, snooze_s=snooze_s)
+    if recorded:
+        payload["preference"] = recorded
     return payload, 200
+
+
+# ==================== 第 12 周：有限反馈规则 F1–F5 → 显式偏好 ====================
+
+def _record_feedback_preference(inquiry, channel, mute=False, feedback=None,
+                                scope=None, snooze_s=None):
+    """把用户的一次反馈落成显式提醒偏好；不需要落偏好时返回 None。
+
+    分工口径（本周最重要的设计约束）：
+      * 第 9 周的记录级冷却 = 默认策略，本函数一次都不改它；
+      * 本函数写入的偏好 = 叠加在默认策略之上的**显式策略**，可查看、可单条清除；
+      * 清除偏好或本轮到期 → 自动回到默认策略，而不是"完全没有冷却"。
+
+    映射规则：
+      feedback="snooze"                      → F4 稍后：压住该事件（event_key）到点为止
+      scope="session" / feedback="ignore"     → F3 忽略：本轮静音（"这次不用提醒"）
+      mute（第 9 周"本次不再询问"）/ scope="event_reason" → 该类原因静音
+      feedback="correct"                      → F2 纠正：该类原因静音（与误判冷却同口径）
+      scope="event_key" / "request_id"        → 只静音这一条事件 / 这一张图
+      feedback="restore_default"              → F5 恢复默认（撤销全部偏好 + 参数回默认快照）
+    """
+    if feedback == "restore_default":
+        payload, _ = pref.restore_default()
+        payload["kind"] = "restore_default"
+        payload["scope_label"] = "全部偏好"
+        payload["hint"] = f"；已恢复默认提醒（配置 v{payload['from_version']} → v{payload['version']}）"
+        return payload
+
+    # 调用方没有表达任何显式偏好 → 完全维持第 9 周行为
+    if not (mute or feedback or scope):
+        return None
+
+    event_key = inquiry.get("event_key")
+    reason = inquiry.get("reason")
+    request_id = inquiry.get("request_id")
+    p = pref.params()
+
+    if feedback == "snooze":
+        scope, action, scope_key = "event_key", "snooze", event_key
+        duration_s, until, note = (snooze_s or p["snooze_s"]), None, "F4 稍后：到点前不再打扰该事件"
+    elif scope == "session" or (feedback == "ignore" and not scope):
+        scope, action, scope_key = "session", "mute", pref.SESSION_ID
+        duration_s, until, note = None, pref.session_deadline(), "F3 忽略：本轮不再提醒，本轮结束自动恢复默认"
+    elif scope == "event_reason" or mute or feedback == "correct":
+        scope, action, scope_key = "event_reason", "mute", reason
+        duration_s = p["correct_mute_s"] if (feedback == "correct" or mute) else p["reason_mute_s"]
+        until, note = None, ("F2 纠正：该类原因误判，暂时静音"
+                             if feedback == "correct" else
+                             ("第 9 周\"本次不再询问\"：该类原因长静音" if mute else
+                              "该类原因静音"))
+    elif scope in ("event_key", "request_id"):
+        scope_key = event_key if scope == "event_key" else str(request_id)
+        action, duration_s, until = "mute", p["reason_mute_s"], None
+        note = "只静音这一条事件" if scope == "event_key" else "只静音这一张图"
+    else:
+        return None
+
+    if not scope_key:
+        return None
+
+    payload, _ = pref.set_preference(
+        scope, str(scope_key)[:64], action, reason=reason, request_id=request_id,
+        event_key=event_key, inquiry_id=inquiry.get("inquiry_id"),
+        feedback=feedback or ("snooze" if action == "snooze" else
+                              ("correct" if note.startswith("F2") else "ignore")),
+        channel=channel, duration_s=duration_s, until=until, note=note)
+    payload["kind"] = payload.get("feedback") or feedback
+    payload["scope"] = scope
+    payload["scope_label"] = pref.SCOPE_LABELS.get(scope, scope)
+    payload["action"] = action
+    payload["expires_at_text"] = payload.get("expires_at_text")
+    payload["hint"] = (f"；已记录偏好：{payload['scope_label']}"
+                       f"{'静音' if action == 'mute' else '稍后'}"
+                       f"（v{payload['from_version']} → v{payload['version']}，"
+                       f"至 {payload.get('expires_at_text') or '本轮结束'}）")
+    return payload
 
 
 # ==================== 通道投递 ====================
@@ -594,33 +785,65 @@ def match_answer_text(text):
 
     只做规则匹配，不新增意图枚举：语音与文字助手在调用 LLM 之前先问一次本函数，
     命中就直接答复询问，避免为了本周新意图改动第 6 周的意图分类契约。
+
+    第 12 周保留本函数的原有契约（只回一个 decision），细节改由
+    match_feedback_text() 提供，旧调用点不受影响。
     """
-    if not text:
+    matched = match_feedback_text(text)
+    return matched["decision"] if matched else None
+
+
+def match_feedback_text(text):
+    """把一句话映射成答复参数 {"decision", "feedback", "scope"}；匹配不到返回 None。
+
+    规则仍然只有词表匹配这一种（不接 LLM、不加意图）：
+      * "稍后再说"     → decline + feedback=snooze（偏好压在这条事件上）
+      * "这类都别问"   → decline + feedback=ignore + scope=event_reason
+      * "这次不用提醒" → decline + feedback=ignore + scope=session（本轮不重复打扰）
+      * 其余三档沿用第 9 周，feedback/scope 为空 → 行为与第 9 周逐字节一致
+    """
+    if not text or not pending_for_ui():
         return None
     lowered = text.strip()
-    if not pending_for_ui():
-        return None
 
     # 顺序重要："不用重拍"既含"不用"也含"重拍"，必须先判"其实可用"
     if any(w in lowered for w in USABLE_WORDS):
-        return "usable"
+        return {"decision": "usable", "feedback": None, "scope": None}
+    if any(w in lowered for w in SNOOZE_WORDS):
+        return {"decision": "decline", "feedback": "snooze", "scope": "event_key"}
+
+    # 作用域词表（reminder_pref）本身全是"别提醒/不用提醒"的否定表达，
+    # 命中即可判定为拒绝本次询问，并顺带确定偏好的作用域（F3）。
+    scope = pref.match_scope_text(lowered)
+    if scope:
+        return {"decision": "decline", "feedback": "ignore", "scope": scope}
     if any(w in lowered for w in DECLINE_WORDS):
-        return "decline"
+        # 没说出作用域就保持第 9 周的纯 decline
+        return {"decision": "decline", "feedback": None, "scope": None}
     if any(w in lowered for w in RETAKE_WORDS):
-        return "retake"
+        return {"decision": "retake", "feedback": None, "scope": None}
     return None
 
 
 def try_answer_from_text(text, channel="voice"):
-    """若文本是一次询问答复，则直接答复并返回结果 dict；否则返回 None。"""
-    decision = match_answer_text(text)
-    if not decision:
+    """若文本是一次询问答复，则直接答复并返回结果 dict；否则返回 None。
+
+    第 12 周只多带两个可选参数（feedback/scope），匹配不到作用域时与第 9 周完全一致。
+    "恢复默认提醒"这类配置指令不在本函数处理：它不针对任何一条询问，由调用方
+    先问 reminder_pref.try_config_from_text()，避免把配置操作误标成 answer_inquiry。
+    """
+    matched = match_feedback_text(text)
+    if not matched:
         return None
     inquiry = pending_for_ui()
     if not inquiry:
         return None
-    payload, status_code = answer(inquiry["inquiry_id"], decision, channel)
-    payload["matched_decision"] = decision
+    payload, status_code = answer(
+        inquiry["inquiry_id"], matched["decision"], channel,
+        feedback=matched["feedback"], scope=matched["scope"])
+    payload["matched_decision"] = matched["decision"]
+    payload["matched_feedback"] = matched["feedback"]
+    payload["matched_scope"] = matched["scope"]
     payload["ok"] = status_code == 200
     return payload
 
@@ -637,6 +860,15 @@ def config_snapshot():
         "allow_replay": ALLOW_REPLAY,
         "askable_reasons": sorted(REASONS.keys()),
         "non_inquiry_reasons": sorted(NON_INQUIRY_REASONS),
+        # 第 12 周：G6 偏好门的参数与本轮口径，前端据此渲染作用域/稍后选项
+        "gates": ["G1_source", "G2_allow_replay", "G3_reason_askable", "G4_cooldown",
+                  "G6_preference", "G5_global_gap"],
+        "feedbacks": ["confirm", "correct", "ignore", "snooze", "restore_default"],
+        "scopes": [{"scope": k, "label": v} for k, v in sorted(pref.SCOPE_LABELS.items())],
+        "preference": pref.params(),
+        "session": {"session_id": pref.SESSION_ID,
+                    "remaining_s": round(pref.session_remaining_s(), 1)},
+        "config_version": pref.current_version(),
     }
 
 
@@ -653,15 +885,31 @@ def api_answer(inquiry_id):
     """网页/语音答复入口。
 
     请求体：{"decision": "retake"|"decline"|"usable",
-             "channel": "ui"|"voice", "mute": false}
+             "channel": "ui"|"device_key"|"voice", "mute": false,
+             "feedback": "confirm"|"correct"|"ignore"|"snooze"|"restore_default",
+             "scope": "session"|"event_reason"|"event_key"|"request_id",
+             "snooze_s": 300}
+
+    feedback/scope/snooze_s 是第 12 周新增的可选字段：都不传时行为与第 9 周一致。
     """
     data = request.get_json(silent=True) or {}
     decision = data.get("decision", "")
     channel = data.get("channel", "ui")
     if channel not in CHANNELS:
         channel = "ui"
+    feedback = data.get("feedback")
+    if feedback not in ANSWER_FEEDBACKS:
+        feedback = None
+    scope = data.get("scope")
+    if scope not in pref.SCOPES:
+        scope = None
+    try:
+        snooze_s = float(data.get("snooze_s")) if data.get("snooze_s") is not None else None
+    except (TypeError, ValueError):
+        snooze_s = None
     payload, status_code = answer(inquiry_id, decision, channel,
-                                  mute=bool(data.get("mute", False)))
+                                  mute=bool(data.get("mute", False)),
+                                  feedback=feedback, scope=scope, snooze_s=snooze_s)
     return jsonify(payload), status_code
 
 

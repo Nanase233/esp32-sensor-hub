@@ -49,6 +49,10 @@
 - ✅ 多源证据交互上下文：原始观测 / 派生状态 / 交互决策三层，事实带来源、更新时间与规则版本（第 11 周）
 - ✅ 上下文回答 + 至多一条追问；遮挡不判危险、无 GNSS 不造坐标、模型推断与观测分开（第 11 周）
 - ✅ 冲突样例落库与回放：`/api/context/traces?only_conflict=1`（第 11 周）
+- ✅ 用户纠错落成显式提醒偏好：F1–F5 有限反馈规则，本轮 / 该类原因 / 这条事件三种作用域（第 12 周）
+- ✅ “这次不用提醒”只压本轮、到期自动恢复默认；偏好可查看、可单条清除，清除即回到第 9 周默认策略（第 12 周）
+- ✅ 重复提醒次数可取证：`reminder_events` 记录观测/提醒/抑制计数，修改前后 4 次打扰 → 0 次（第 12 周）
+- ✅ 配置版本 append-only：参数变更与回退都生成新版本，历史保留且旧版本仍可解释（第 12 周）
 
 ## 硬件要求
 
@@ -151,7 +155,7 @@ esp32-imu/
 │   └── idf_component.yml      # ESP-IDF 组件依赖（esp32-camera）
 ├── server/                    # 服务端代码
 │   ├── app.py                 # Flask 应用主程序
-│   ├── inquiry.py             # 第 9 周：主动询问的门控/状态机/冷却与 API
+│   ├── inquiry.py             # 第 9 周：主动询问的门控/状态机/冷却与 API（第 12 周加 G6 偏好门）
 │   ├── requirements.txt       # Python 依赖
 │   ├── test_week6.py          # 第 6 周功能自动化测试
 │   ├── test_week7.py          # 第 7 周功能自动化测试
@@ -161,9 +165,12 @@ esp32-imu/
 │   ├── source_state.py        # 第 10 周：来源状态/年龄/对照聚合（纯读）
 │   ├── test_week10.py         # 第 10 周时间处理与来源缺失测试
 │   ├── week10_evidence.json   # 第 10 周测试原始记录（提交物）
-│   ├── context_engine.py      # 第 11 周：三层证据、R1–R9、回答/追问（纯读）
+│   ├── context_engine.py      # 第 11 周：三层证据、R1–R9、回答/追问（纯读，第 12 周加 R10）
 │   ├── test_week11.py         # 第 11 周上下文解释与冲突/缺失测试
 │   ├── week11_evidence.json   # 第 11 周测试原始记录（提交物）
+│   ├── reminder_pref.py       # 第 12 周：显式提醒偏好、事件计数、配置版本与回退
+│   ├── test_week12.py         # 第 12 周偏好作用域/重复提醒前后对照测试
+│   ├── week12_evidence.json   # 第 12 周测试原始记录（提交物）
 │   ├── images/                # 采集到的环境图像（运行时生成）
 │   ├── vision/                # 视觉推理模块（第 8 周）
 │   │   ├── models.py          # 统一推理接口/教师基线/学生接入位/拒识逻辑
@@ -590,7 +597,7 @@ venv\Scripts\python.exe test_week10.py     # 16 项；失败即非零退出
 | 派生状态 | 由有限规则与有效时间窗计算，不直接测量 | 5s 窗口 → 静止 / 有活动 / 无法判断 |
 | 交互决策 | 回答、待确认、冲突、是否追问 | `D2 回答 + 追问是否重拍` |
 
-**规则（`week11-rules@1.0.0`）**
+**规则（`week11-rules@1.0.0`；第 12 周新增 R10 后升为 `week12-rules@1.1.0`，R1–R9 未改）**
 
 | 规则 | 内容 | 关键参数 |
 |---|---|---|
@@ -668,6 +675,126 @@ venv\Scripts\python.exe test_week11.py    # 20 项；失败即非零退出
 - 不计算、不宣称位置精度；不输出坐标或危险结论；模型分数只表示模型输出；
 - trace 保留规则版本与阈值快照，阈值调整必须升版本，旧记录仍可解释。
 
+### 让用户纠错影响后续提醒（第 12 周）
+
+本周问题：用户说“这次不用提醒”，系统怎样记住当前选择，又能恢复默认？
+
+做法是把用户的每一次纠错落成**可查看、可撤销、会到期的显式偏好**，而不是不可见的权重。
+第 9 周的记录级冷却保持原样，它就是“默认策略”；本周的偏好叠加在默认策略之上，
+**清除偏好 = 回到默认策略（仍会提醒），而不是“完全没有冷却”**。
+
+**有限反馈规则 F1–F5（`inquiry.py` + `reminder_pref.py`）**
+
+| 规则 | 用户说的话/动作 | 确定的去向 | 生效范围 |
+|---|---|---|---|
+| F1 confirm 确认 | “好，重拍一张” | 走第 9 周重拍链路，并自动撤销该事件的“稍后” | 无新增偏好 |
+| F2 correct 纠正 | “其实可用”（系统误判） | 该类原因暂时静音 | `event_reason`，默认 30 分钟 |
+| F3 ignore 忽略 | “这次不用提醒” | 本轮静音，本轮结束自动恢复默认 | `session`，不超过本轮 |
+| F4 snooze 稍后 | “待会儿再问” | 压住这条事件到点为止，到期后同类事件仍可提醒 | `event_key`，默认 300s |
+| F5 restore_default | “恢复默认提醒” | 撤销全部偏好 + 参数回到默认快照 | 全局 |
+
+“这次不用提醒”**只写本轮**，不会静默升级成永久关闭：所有静音偏好都必须带到期时间，
+词表到作用域的映射是确定的（`match_scope_text`），自由文本不会被解释成“永久别问”。
+
+**偏好作用域（越小越贴合字面意思）**
+
+| 作用域 | 键 | 典型来源 | 默认到期 |
+|---|---|---|---|
+| `session` 本轮 | `SESSION_ID` | F3 忽略 | 本轮结束（进程一轮 + 15 分钟 TTL 取先） |
+| `event_reason` 该类原因 | `blocked`/`dark`/… | F2 纠正、“这类都别问了” | `reason_mute_s` 86400s / `correct_mute_s` 1800s |
+| `event_key` 这条事件 | 图 request_id + reason 的稳定签名 | F4 稍后 | `snooze_s` 300s |
+| `request_id` 这张图 | 单次取图 request_id | 前端显式选择 | 跟随上述动作 |
+
+“本轮”= **服务端进程一次启动为一轮**（`sess-xxxxxxxx` 进程级唯一），同时受
+`PREF_SESSION_TTL_S`（默认 900s）约束；重启服务或 TTL 到期都会结束本轮，
+`session` 级偏好随之失效并记为 `session_expired` —— 这就是自动恢复默认。
+
+**门控与规则（相对第 9/11 周只加不改）**
+
+| 编号 | 位置 | 内容 |
+|---|---|---|
+| G6 偏好门 | `inquiry.on_unusable`，在 G4 之后、G5 之前 | 询问创建前先问一次“用户是否已说过别问”；命中即不弹窗，事件仍计数并留 `suppress_code` |
+| G1–G5 | 第 9 周原样 | 原因集合 / 真机来源 / 单飞行 / 间隔冷却 / 同 request_id 不重复 |
+| R10 偏好一致 | `context_engine.build_context` | 显式偏好压掉 R8 的“拍一张”追问，并在回答里如实说明原因与恢复入口；只压 `capture`，采样/澄清/来源类追问不受影响 |
+
+`reminder_events` 记录每个事件的 `seen_count / trigger_count / suppress_count`，
+这是“修改前后重复提醒次数”这组对比的唯一数据来源；`inquiries` 只加三个可空列
+（`event_key / session_id / config_version`），不改任何既有列语义。
+
+**数据表（只新增，不动 `imu_data / image_records / inference_results / human_feedbacks`）**
+
+| 表 | 用途 |
+|---|---|
+| `reminder_preferences` | 一条偏好一行；撤销只标记 `revoked_at`，历史保留 |
+| `reminder_events` | 事件签名与观测/提醒/抑制计数 |
+| `reminder_feedbacks` | 每次纠错/清除/回退的流水（配置变化记录） |
+| `config_versions` | append-only 配置快照；回退也是新增版本，历史永不删除 |
+
+**接口**
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/preferences` | 生效偏好 + 本轮剩余 + 参数 + 配置版本 + 反馈流水 + 统计 |
+| `POST /api/preferences` | 显式设置一条偏好（`scope/key/action/reason/duration_s/channel`） |
+| `POST /api/preferences/<pref_id>/revoke` | 清除单条偏好（回到默认策略） |
+| `POST /api/preferences/session/clear` | 清除本轮全部偏好 |
+| `POST /api/preferences/restore_default` | F5 恢复默认（撤销偏好 + 参数回默认快照） |
+| `GET /api/config/versions?limit=20` | 配置版本历史（来源/参数快照/说明） |
+| `POST /api/config/rollback` | 回退到某版本 = 重新生效并追加新版本 |
+| `POST /api/config/params` | 参数变更（未知键 400，变更即新版本） |
+| `GET /api/reminders/stats?limit=50` | 事件计数与按原因/按码的抑制分布 |
+
+答复入口沿用第 9 周：`POST /api/inquiry/<inq_id>/answer` 可带 `feedback` / `scope`，
+不带即为第 9 周原语义。语音/文字里说“恢复默认提醒”会由 `POST /api/nl_query`
+前置路由到 `intent="reminder_preference"`。
+
+**修改前后对照（`server/week12_evidence.json`）**
+
+同类“画面被遮挡”事件各 4 次，第 9 周冷却参数压到 0，因此打扰次数的变化只可能来自本周偏好：
+
+| 阶段 | 观测次数 | 实际打扰 | 被压掉 | 说明 |
+|---|---|---|---|---|
+| 修改前（默认策略） | +4 | **+4** | +0 | 每次都弹提醒 —— 这就是重复打扰 |
+| 修改后（记一条 F3 本轮静音） | +4 | **0** | +4 | 全部被 G6 压掉，`suppress_code=session_muted` |
+
+同一事件重放（同一 `request_id` + 同一原因）只让 `seen_count` 变 2，`trigger_count`
+仍为 1，抑制码 `already_asked`；清除本轮偏好后下一条事件立刻重新触发询问。
+
+**前端**
+
+新增“🔕 提醒偏好与配置版本”面板：本轮剩余时间与本轮口径说明、生效偏好列表（单条撤销）、
+参数与配置版本、配置版本历史（可回退）、事件计数表与前后对照、恢复默认按钮。
+询问卡片增加作用域下拉（由服务端 `config.scopes` 驱动）：默认“仅本次”＝不写任何偏好，
+与第 9 周行为逐字节一致；其余选项各对应一种显式作用域。
+
+**验收与演示**
+
+```bash
+cd server
+venv\Scripts\python.exe test_week12.py    # 20 项；失败即非零退出
+# 原始记录写入 server/week12_evidence.json
+venv\Scripts\python.exe test_week9.py     # 回归 16 项
+venv\Scripts\python.exe test_week11.py    # 回归 20 项
+```
+
+演示顺序（约 5 分钟）：
+
+1. 遮住镜头连续造成 4 次同类事件 → 打扰 4 次，出示 `before` 计数；
+2. 第 5 次弹提醒时选“这次不用提醒” → 面板出现 1 条本轮偏好，到期时间＝本轮结束；
+3. 再造成 4 次同类事件 → 打扰 0 次、压掉 4 次，出示 `after` 计数；
+4. 单条撤销 → 下一条事件立刻又弹提醒（回到默认策略，不是永久关闭）；
+5. 文字说“这类都别问了” → 该类原因静音，事件被 `reason_muted` 压掉；
+6. 点“恢复默认提醒” → 偏好清空、参数回默认快照、版本 +1，提醒立刻恢复；
+7. 打开配置版本历史，回退到 v1 → 生成新版本而历史不减；
+8. 问“环境安全吗” → 本轮静音时追问消失并说明原因，恢复默认后追问回来。
+
+**证据口径**
+
+- `test_week12.py` 用临时库、固定参数环境变量，不写生产 `imu_data.db`；
+- 偏好与配置操作只允许写本周 4 张表，`human_feedbacks` 保持 0 条（保存反馈 ≠ 在线学习成功）；
+- 打扰/抑制数字只来自 `reminder_events` 计数，前后对照的条件除“是否记录显式偏好”外完全相同；
+- 配置版本 append-only，每条含来源、参数快照与说明，历史版本仍可解释当时的行为。
+
 ## 排错指南
 
 ### ESP32 无法读取 IMU
@@ -695,6 +822,7 @@ venv\Scripts\python.exe test_week11.py    # 20 项；失败即非零退出
 2. **是否已有未决询问**：单飞行，已有一条 `asking` 时新事件不会新建
 3. **原因是否可询问**：低分 / 候选接近不触发询问（属于模型不确定）
 4. **来源是否为回放**：`INQUIRY_ALLOW_REPLAY=0`（默认）时回放图不触发
+5. **是否被显式偏好压掉**：`GET /api/preferences` 看生效偏好与本轮剩余，`GET /api/reminders/stats` 的 `suppress_by_code` 会给出 `session_muted / reason_muted / event_muted / request_muted / event_snoozed`；说“恢复默认提醒”或 `POST /api/preferences/restore_default` 立即恢复
 
 ## 技术细节
 

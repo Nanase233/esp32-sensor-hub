@@ -40,6 +40,7 @@ sys.path.insert(0, HERE)
 
 import app as server_app                  # noqa: E402
 import context_engine as ctx              # noqa: E402
+import reminder_pref as pref_mod          # noqa: E402
 
 FIXED = time.time()
 TTL = {"imu_ms": 5000, "camera_ms": 600000, "link_ms": 10000}
@@ -74,6 +75,9 @@ server_app.DB_FILE = os.path.join(TMP_DIR, "test.db")
 server_app.IMAGE_DIR = os.path.join(TMP_DIR, "images")
 os.makedirs(server_app.IMAGE_DIR, exist_ok=True)
 server_app.init_db()
+# 第 12 周 R10：build_context 会只读查询提醒偏好表，临时库同样要先建表（默认无偏好 → 不静音）
+pref_mod.configure(server_app.DB_FILE)
+pref_mod.init_db()
 client = server_app.app.test_client()
 
 
@@ -204,9 +208,9 @@ def motion_rows(count, ax_seq=None, ay_seq=None):
 
 clear_all()
 res = ask("你现在知道什么？")
-report("T1 规则版本、9 条规则与阈值快照",
+report("T1 规则版本、10 条规则与阈值快照",
        res["rule_version"] == ctx.RULE_VERSION
-       and [rule["id"] for rule in res["rules"]] == [f"R{i}" for i in range(1, 10)]
+       and [rule["id"] for rule in res["rules"]] == [f"R{i}" for i in range(1, 11)]
        and res["thresholds"]["motion_window_s"] == 5.0
        and res["thresholds"]["scene_recheck_s"] == 120,
        f"version={res['rule_version']} rules={len(res['rules'])}", attribution="rules")

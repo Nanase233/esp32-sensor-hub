@@ -14,8 +14,13 @@
   - 模型输出只标为“推断”，不写成观测；
   - 规则与阈值版本化，随响应和 trace 一起保存，便于回放对比。
 
+第 12 周增补（只加一条规则，其余判定不动）：
+  - R10 偏好一致：用户已经显式说过"这次不用提醒 / 这类都别问"时，
+    不再追加"要不要现在拍一张"的取图追问；静音范围与到期时间如实写进事实里，
+    用户随时可以"恢复默认提醒"改回来。偏好的权威在 reminder_pref.py，本模块只读。
+
 运行位置：服务端（与 app.py 同进程）。
-测试：server/test_week11.py（固定 now + 临时库）。
+测试：server/test_week11.py（固定 now + 临时库）、server/test_week12.py（R10 与偏好回退）。
 """
 
 from __future__ import annotations
@@ -29,12 +34,14 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import reminder_pref as pref
 import source_state
 
 # ==================== 规则版本与阈值 ====================
 
 # 任何阈值调整都要升版本，旧 trace 仍按旧版本解释。
-RULE_VERSION = "week11-rules@1.0.0"
+# week12-rules@1.1.0：新增 R10 偏好一致（只影响追问，不改变任何观测与派生判定）。
+RULE_VERSION = "week12-rules@1.1.0"
 
 # 运动派生窗口：与 IMU 的 5s 陈旧阈值一致；设备约 2Hz 上传，5s 约 10 个样本。
 MOTION_WINDOW_S = 5.0
@@ -119,6 +126,11 @@ RULES: List[Dict[str, str]] = [
         "id": "R9",
         "title": "只读与来源",
         "description": "不写原始观测；事实保留 device/replay 来源；trace 保存规则版本与阈值快照。",
+    },
+    {
+        "id": "R10",
+        "title": "偏好一致",
+        "description": "用户显式静音（本轮/该类原因）期间不追加取图追问；到期或恢复默认后自动回到 R8 的默认追问策略。",
     },
 ]
 
@@ -628,6 +640,29 @@ def _followup(
     return None
 
 
+def _preference_gate(followup: Optional[Dict[str, Any]], db_path: str,
+                     now: float) -> Dict[str, Any]:
+    """R10：取图追问是否被用户的显式偏好压掉（第 12 周，只读判定）。
+
+    只压 action="capture" 的追问：采样/澄清/来源这三类追问与"重复提醒"无关，
+    压掉只会让回答变弱。恢复默认或本轮到期后 blocks_capture_prompt 自动为假，
+    于是回到 R8 的默认策略 —— 这就是"记住当前选择，又能恢复默认"的落点。
+    """
+    if not followup or followup.get("action") != "capture":
+        return {"blocked": False}
+    return pref.blocks_capture_prompt(db_path, now)
+
+
+def _preference_text(gate: Dict[str, Any]) -> str:
+    """把 R10 命中写成一句人能读懂的说明（同时作为事实文本与回答后缀）。"""
+    if gate.get("session_muted"):
+        scope = f"本轮，剩余 {max(0, int(round(gate.get('session_remaining_s') or 0)))} 秒"
+    else:
+        scope = "该类原因（" + "、".join(gate.get("muted_reason_labels") or []) + "）"
+    return (f"按你之前的反馈（作用域：{scope}），这里不再提示重拍"
+            f"（配置 v{gate.get('config_version')}）；说“恢复默认提醒”随时可以改回来。")
+
+
 # ==================== 回答模板 ====================
 
 def _motion_sentence(motion: Dict[str, Any]) -> str:
@@ -981,6 +1016,19 @@ def build_context(
         sources[key]["status"] == "not_attempted" for key in ("imu", "camera", "link")
     )
     followup = _followup(topic, motion, snapshot, sources, all_missing, ttl)
+    # ---------- R10：用户显式偏好优先于默认追问策略（第 12 周） ----------
+    preference = _preference_gate(followup, db_path, now)
+    if preference.get("blocked"):
+        facts.append(_fact(
+            "preference", "R10", _preference_text(preference), "user",
+            observed_at=now,
+            can_represent_current=True,
+            scope="session" if preference.get("session_muted") else "event_reason",
+            config_version=preference.get("config_version"),
+            session_remaining_s=preference.get("session_remaining_s"),
+            muted_reasons=preference.get("muted_reasons"),
+        ))
+        followup = None
     decision_id = _decision_id(topic, all_missing, followup)
 
     answer = _answer(topic, motion, snapshot, sources, pending, conflicts)
@@ -989,6 +1037,9 @@ def build_context(
             "目前没有收到任何来源数据：加速度计、摄像头和链路都没有可核对的观测，"
             "无法回答当前状态；没有数据不等于设备故障。"
         )
+    if preference.get("blocked"):
+        # 如实说明"为什么这次没有追问"，否则用户会以为系统忘了他的选择。
+        answer = f"{answer} {_preference_text(preference)}"
 
     # 来源汇总：只统计“观测”事实，缺失项不算回放/真机证据。
     observation_provenance = {
@@ -1013,6 +1064,7 @@ def build_context(
             "pending": pending,
             "followup": followup,
             "conflicts": conflicts,
+            "preference": preference,
         },
     }
 
@@ -1031,6 +1083,7 @@ def build_context(
         "facts": facts,
         "pending": pending,
         "followup": followup,
+        "preference": preference,
         "conflicts": conflicts,
         "layers": layers,
         "motion": motion,

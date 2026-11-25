@@ -11,7 +11,7 @@
         "camera_ms": 600000,
         "link_ms": 10000
       },
-      "rule_version": "week11-rules@1.0.0",
+      "rule_version": "week12-rules@1.1.0",
       "thresholds": {
         "motion_window_s": 5.0,
         "motion_min_samples": 4,
@@ -31,7 +31,8 @@
         "R6",
         "R7",
         "R8",
-        "R9"
+        "R9",
+        "R10"
       ],
       "decisions": {
         "D1": "回答，无需追问",
@@ -45,144 +46,144 @@
   },
   "cases": [
     {
-      "case": "T1 规则版本、9 条规则与阈值快照",
+      "case": "T1 规则版本、10 条规则与阈值快照",
       "pass": true,
-      "detail": "version=week11-rules@1.0.0 rules=9",
+      "detail": "version=week12-rules@1.1.0 rules=10",
       "attribution": "rules",
-      "recorded_at": 1795397107.1902814
+      "recorded_at": 1795573445.3675754
     },
     {
       "case": "T2 空库：无法确认 + 引导查看来源 + 无坐标",
       "pass": true,
       "detail": "decision=D5 followup=sources",
       "attribution": "server",
-      "recorded_at": 1795397107.1912796
+      "recorded_at": 1795573445.3675754
     },
     {
       "case": "T3 静止样本 → 静止，证据充分度 high",
       "pass": true,
       "detail": "state=still n=8 age=500",
       "attribution": "device",
-      "recorded_at": 1795397107.2984269
+      "recorded_at": 1795573445.5092685
     },
     {
       "case": "T3b 恒定的安装/标定偏差不算移动",
       "pass": true,
       "detail": "state=still std=0.0 norm_delta=10.358",
       "attribution": "device",
-      "recorded_at": 1795397107.3742914
+      "recorded_at": 1795573445.643738
     },
     {
       "case": "T4 大幅波动 → 有活动",
       "pass": true,
       "detail": "state=moving std=2.0",
       "attribution": "device",
-      "recorded_at": 1795397107.4629261
+      "recorded_at": 1795573445.7596333
     },
     {
       "case": "T5 样本不足 → 无法判断 + 追问采样",
       "pass": true,
       "detail": "reason=insufficient_samples followup=collect",
       "attribution": "rules",
-      "recorded_at": 1795397107.507925
+      "recorded_at": 1795573445.80546
     },
     {
       "case": "T6 12s 无新样本：无法判断 + 链路在线冲突",
       "pass": true,
       "detail": "reason=no_samples conflicts=['link_ok_data_stale']",
       "attribution": "time",
-      "recorded_at": 1795397107.5409238
+      "recorded_at": 1795573445.8389456
     },
     {
       "case": "T7 位置问题：无定位来源，旧快照不包装成当前位置",
       "pass": true,
       "detail": "decision=D4 conflicts=['stale_snapshot_inference']",
       "attribution": "interaction",
-      "recorded_at": 1795397107.5878258
+      "recorded_at": 1795573445.8914638
     },
     {
       "case": "T8 遮挡：无法确认 + 不判危险 + 重拍追问",
       "pass": true,
       "detail": "decision=D2 conflicts=['old_snapshot_plus_failure']",
       "attribution": "interaction",
-      "recorded_at": 1795397107.636826
+      "recorded_at": 1795573445.945663
     },
     {
       "case": "T9 模型结果标为推断，带版本/分数，不写成观测",
       "pass": true,
       "detail": "facts=1 label=computer keyboard",
       "attribution": "model",
-      "recorded_at": 1795397107.7597618
+      "recorded_at": 1795573446.0832934
     },
     {
       "case": "T10 模型拒识 → 未能确认 + 重拍追问，标签不进入回答",
       "pass": true,
       "detail": "decision=D2",
       "attribution": "model",
-      "recorded_at": 1795397107.8155365
+      "recorded_at": 1795573446.1454139
     },
     {
       "case": "T11 运动问题优先补采样，不被旧画面劫持",
       "pass": true,
       "detail": "followup=collect",
       "attribution": "rules",
-      "recorded_at": 1795397107.8478866
+      "recorded_at": 1795573446.1864722
     },
     {
       "case": "T12 安全类问题：只描述画面，不给安全/危险结论",
       "pass": true,
       "detail": "最近一次成功取图在 30.0 秒 前，模型标签“mask”（模型分数 0.550，模型分数未经校准，不等于正确率，模型版",
       "attribution": "interaction",
-      "recorded_at": 1795397107.900893
+      "recorded_at": 1795573446.2905664
     },
     {
       "case": "T13 trace 保存规则版本/冲突，only_conflict 可取回",
       "pass": true,
       "detail": "HTTP=200 traces=1",
       "attribution": "server",
-      "recorded_at": 1795397107.9878116
+      "recorded_at": 1795573446.362207
     },
     {
       "case": "T14 上下文解释只读：原始表与图片哈希不变",
       "pass": true,
       "detail": "counts={'imu_data': 1, 'image_records': 1, 'inference_results': 1} hash_same=True",
       "attribution": "server",
-      "recorded_at": 1795397107.9986308
+      "recorded_at": 1795573446.374729
     },
     {
       "case": "T15 replay 来源保留在事实与 trace 汇总中",
       "pass": true,
       "detail": "camera_prov=replay summary=mixed",
       "attribution": "replay",
-      "recorded_at": 1795397108.05195
+      "recorded_at": 1795573446.4283268
     },
     {
       "case": "T16 白名单：上下文问句命中，取图/查询命令不命中",
       "pass": true,
       "detail": "whitelist ok",
       "attribution": "interaction",
-      "recorded_at": 1795397108.05195
+      "recorded_at": 1795573446.4283268
     },
     {
       "case": "T17 nl_query：上下文问句走 context_query",
       "pass": true,
       "detail": "HTTP=200 intent=context_query",
       "attribution": "interaction",
-      "recorded_at": 1795397108.091491
+      "recorded_at": 1795573446.472411
     },
     {
       "case": "T18 /api/context 参数校验",
       "pass": true,
       "detail": "empty=400 long=400 missing=404",
       "attribution": "server",
-      "recorded_at": 1795397108.092493
+      "recorded_at": 1795573446.4734123
     },
     {
       "case": "T19 无快照的位置问题：保留待确认，不补造位置",
       "pass": true,
       "detail": "decision=D4",
       "attribution": "interaction",
-      "recorded_at": 1795397108.1244931
+      "recorded_at": 1795573446.5059845
     }
   ]
 }

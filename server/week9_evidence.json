@@ -24,7 +24,51 @@
       "non_inquiry_reasons": [
         "ambiguous",
         "low_score"
-      ]
+      ],
+      "gates": [
+        "G1_source",
+        "G2_allow_replay",
+        "G3_reason_askable",
+        "G4_cooldown",
+        "G6_preference",
+        "G5_global_gap"
+      ],
+      "feedbacks": [
+        "confirm",
+        "correct",
+        "ignore",
+        "snooze",
+        "restore_default"
+      ],
+      "scopes": [
+        {
+          "scope": "event_key",
+          "label": "这条事件"
+        },
+        {
+          "scope": "event_reason",
+          "label": "该类原因"
+        },
+        {
+          "scope": "request_id",
+          "label": "这张图"
+        },
+        {
+          "scope": "session",
+          "label": "本轮"
+        }
+      ],
+      "preference": {
+        "session_ttl_s": 900.0,
+        "snooze_s": 300.0,
+        "reason_mute_s": 86400.0,
+        "correct_mute_s": 1800.0
+      },
+      "session": {
+        "session_id": "sess-dea967a7",
+        "remaining_s": 895.8
+      },
+      "config_version": 3
     },
     "note": "冷却参数为测试用秒级取值；生产默认值见 server/inquiry.py",
     "fixtures": {
@@ -38,29 +82,33 @@
       "pass": true,
       "detail": "reason=blocked question=镜头可能被挡住了，这一张看不出周围情况。要重拍一张吗？",
       "attribution": "device",
-      "recorded_at": 1794532484.2109735,
-      "request_id": "645a3e01",
+      "recorded_at": 1795573445.4149284,
+      "request_id": "f50f253c",
       "inquiry": {
         "answered_at": null,
         "attempt_no": 0,
         "attempt_text": "首次询问",
+        "config_version": 3,
         "cooldown_remaining_s": 0,
         "cooldown_until": null,
-        "created_at": 1794532484.2005634,
-        "created_at_text": "2026-11-13 09:14:44",
+        "created_at": 1795573445.3838577,
+        "created_at_text": "2026-11-25 10:24:05",
         "decision": null,
         "decision_channel": null,
         "device_id": "esp32-s3-eye",
-        "expires_at": 1794532486.2005634,
-        "inquiry_id": "inq-2fc244f3bf",
+        "event_key": "64d0b9b5bd53511f",
+        "expires_at": 1795573447.3838577,
+        "feedback": null,
+        "inquiry_id": "inq-255ecfc6e3",
         "max_retake": 2,
         "note": null,
         "question": "镜头可能被挡住了，这一张看不出周围情况。要重拍一张吗？",
         "reason": "blocked",
         "reason_label": "画面被遮挡",
         "remaining_s": 2,
-        "request_id": "645a3e01",
+        "request_id": "f50f253c",
         "retake_request_id": null,
+        "session_id": "sess-dea967a7",
         "source": "device",
         "status": "asking",
         "trigger": "device",
@@ -72,118 +120,118 @@
       "pass": true,
       "detail": "status=declined cooldown=30s",
       "attribution": "interaction",
-      "recorded_at": 1794532484.2234647,
-      "inquiry_id": "inq-2fc244f3bf"
+      "recorded_at": 1795573445.4312315,
+      "inquiry_id": "inq-255ecfc6e3"
     },
     {
       "case": "T3 拒绝后不反复打扰",
       "pass": true,
       "detail": "新事件未产生询问（记录数 1 → 1）",
       "attribution": "interaction",
-      "recorded_at": 1794532484.2725403,
-      "request_id": "b4c08537"
+      "recorded_at": 1795573445.5248272,
+      "request_id": "f13770f4"
     },
     {
       "case": "T4 重复答复不生效",
       "pass": true,
       "detail": "code=409 error=询问已是 declined 状态，本次答复不再生效",
       "attribution": "interaction",
-      "recorded_at": 1794532484.2735496,
-      "inquiry_id": "inq-2fc244f3bf"
+      "recorded_at": 1795573445.5248272,
+      "inquiry_id": "inq-255ecfc6e3"
     },
     {
       "case": "T5 暗光事件触发询问",
       "pass": true,
       "detail": "reason=dark 剩余=2s",
       "attribution": "model",
-      "recorded_at": 1794532484.425294,
-      "request_id": "ba7a552e"
+      "recorded_at": 1795573445.7319436,
+      "request_id": "39a4fb2c"
     },
     {
       "case": "T6 超时未答复按忽略处理",
       "pass": true,
       "detail": "status=expired decision=ignore",
       "attribution": "interaction",
-      "recorded_at": 1794532486.848952,
-      "inquiry_id": "inq-4b24c1fa06"
+      "recorded_at": 1795573448.1482706,
+      "inquiry_id": "inq-e6eee9d1e6"
     },
     {
       "case": "T7 超时后同原因不重复询问",
       "pass": true,
       "detail": "记录数 2 → 2",
       "attribution": "interaction",
-      "recorded_at": 1794532486.9197438,
-      "request_id": "3966ed50"
+      "recorded_at": 1795573448.2430475,
+      "request_id": "289a60e0"
     },
     {
       "case": "T8 模型失败场景触发询问",
       "pass": true,
       "detail": "trigger=model question=识别服务当前不可用，重拍也可能判不了。要再试一张吗？",
       "attribution": "model",
-      "recorded_at": 1794532487.0198064,
-      "request_id": "7735f39a"
+      "recorded_at": 1795573448.4073727,
+      "request_id": "51434f59"
     },
     {
       "case": "T9 误判纠正（其实可用）",
       "pass": true,
       "detail": "status=dismissed 重拍=None 纠错表记录=0",
       "attribution": "interaction",
-      "recorded_at": 1794532487.0363624,
-      "inquiry_id": "inq-85eaa0cc26"
+      "recorded_at": 1795573448.4213867,
+      "inquiry_id": "inq-40120d854b"
     },
     {
       "case": "T10 误判纠正后不重复询问",
       "pass": true,
       "detail": "记录数 3 → 3",
       "attribution": "interaction",
-      "recorded_at": 1794532487.0933955,
-      "request_id": "42647e36"
+      "recorded_at": 1795573448.502486,
+      "request_id": "1210b099"
     },
     {
       "case": "T11 解码失败触发询问",
       "pass": true,
       "detail": "reason=decode_failed",
       "attribution": "server",
-      "recorded_at": 1794532487.1786444,
-      "request_id": "32813486"
+      "recorded_at": 1795573448.6107523,
+      "request_id": "b238e641"
     },
     {
       "case": "T12 确认重拍后进入原有图像任务流",
       "pass": true,
-      "detail": "status=confirmed 新任务=a858caac attempt=1",
+      "detail": "status=confirmed 新任务=af0aca07 attempt=1",
       "attribution": "interaction",
-      "recorded_at": 1794532487.202338,
-      "inquiry_id": "inq-7ecb2657ab"
+      "recorded_at": 1795573448.6337836,
+      "inquiry_id": "inq-697bbc7f1c"
     },
     {
       "case": "T13 重拍可用则关闭询问",
       "pass": true,
       "detail": "status=resolved",
       "attribution": "interaction",
-      "recorded_at": 1794532487.2708907,
-      "inquiry_id": "inq-7ecb2657ab"
+      "recorded_at": 1795573448.7082927,
+      "inquiry_id": "inq-697bbc7f1c"
     },
     {
       "case": "T14 重拍上限后停止追问并建议求助",
       "pass": true,
       "detail": "二次询问=True status=exhausted note=已重拍 2 次仍不可用，建议改用求助",
       "attribution": "interaction",
-      "recorded_at": 1794532487.492131,
-      "inquiry_id": "inq-13d903c64a"
+      "recorded_at": 1795573448.9930334,
+      "inquiry_id": "inq-a6930487ee"
     },
     {
       "case": "T15 单飞行（不连环弹窗）",
       "pass": true,
-      "detail": "第一条=inq-511c506aa7 当前=inq-511c506aa7",
+      "detail": "第一条=inq-b03de5926b 当前=inq-b03de5926b",
       "attribution": "interaction",
-      "recorded_at": 1794532487.5925422
+      "recorded_at": 1795573449.149636
     },
     {
       "case": "T16 询问不影响既有接口语义",
       "pass": true,
       "detail": "未知任务=404 IMU=201",
       "attribution": "server",
-      "recorded_at": 1794532487.6190877
+      "recorded_at": 1795573449.1752553
     }
   ]
 }

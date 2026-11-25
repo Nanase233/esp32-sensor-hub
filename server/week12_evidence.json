@@ -1,0 +1,888 @@
+{
+  "summary": {
+    "week": 12,
+    "title": "让用户纠错影响后续提醒：显式偏好、作用域与配置版本回退",
+    "pass": 20,
+    "fail": 0,
+    "total": 20,
+    "feedback_rules": {
+      "default": "默认配置快照",
+      "confirm": "确认（采纳提醒）",
+      "correct": "纠正（其实可用）",
+      "ignore": "忽略（这次不用提醒）",
+      "snooze": "稍后（待会儿再问）",
+      "restore_default": "恢复默认",
+      "revoke": "清除偏好",
+      "rollback": "配置回退",
+      "params": "参数变更",
+      "session_expired": "本轮到期"
+    },
+    "scopes": {
+      "session": "本轮",
+      "event_reason": "该类原因",
+      "event_key": "这条事件",
+      "request_id": "这张图"
+    },
+    "repeat_reminder_comparison": {
+      "before": {
+        "policy": "默认策略（第 9 周记录级冷却，无显式偏好）",
+        "events": 4,
+        "seen_count": 4,
+        "trigger_count": 4,
+        "suppress_count": 0,
+        "event_total": 4,
+        "requests": [
+          "w12-blocked-1",
+          "w12-blocked-2",
+          "w12-blocked-3",
+          "w12-blocked-4"
+        ]
+      },
+      "after": {
+        "policy": "记录显式偏好后（F3 本轮静音，其余参数与基线完全相同）",
+        "events": 4,
+        "seen_count": 4,
+        "trigger_count": 0,
+        "suppress_count": 4,
+        "event_total": 4,
+        "suppress_codes": [
+          "session_muted",
+          "session_muted",
+          "session_muted",
+          "session_muted"
+        ]
+      },
+      "comparison": {
+        "same_number_of_events": 4,
+        "disturbed_before": 4,
+        "disturbed_after": 0,
+        "suppressed_after": 4,
+        "conclusion": "同样的 4 次同类事件：修改前打扰 4 次，修改后打扰 0 次、压掉 4 次"
+      }
+    },
+    "config": {
+      "session": {
+        "session_id": "sess-1c943c26",
+        "started_at": 1795573453.9168434,
+        "definition": "服务端进程一次启动 = 一轮；重启或 TTL 到期即结束"
+      },
+      "params": {
+        "session_ttl_s": 900.0,
+        "snooze_s": 120.0,
+        "reason_mute_s": 86400.0,
+        "correct_mute_s": 300.0
+      },
+      "config_version": 27,
+      "versions_total": 27,
+      "rule_version": "week12-rules@1.1.0"
+    },
+    "stats": {
+      "event_total": 18,
+      "seen_count": 19,
+      "trigger_count": 12,
+      "suppress_count": 7,
+      "repeat_count": 7,
+      "suppress_by_code": {
+        "already_asked": {
+          "events": 1,
+          "count": 1
+        },
+        "reason_muted": {
+          "events": 2,
+          "count": 2
+        },
+        "session_muted": {
+          "events": 4,
+          "count": 4
+        }
+      },
+      "feedback_by_type": {
+        "confirm": 1,
+        "correct": 1,
+        "ignore": 7,
+        "restore_default": 9,
+        "revoke": 2,
+        "rollback": 1,
+        "session_expired": 1,
+        "snooze": 3
+      }
+    },
+    "note": "第 9 周冷却参数压到 0，因此“打扰次数”的变化只能来自本周的显式偏好；测试用临时库，不写生产 imu_data.db。"
+  },
+  "before_after": {
+    "before": {
+      "policy": "默认策略（第 9 周记录级冷却，无显式偏好）",
+      "events": 4,
+      "seen_count": 4,
+      "trigger_count": 4,
+      "suppress_count": 0,
+      "event_total": 4,
+      "requests": [
+        "w12-blocked-1",
+        "w12-blocked-2",
+        "w12-blocked-3",
+        "w12-blocked-4"
+      ]
+    },
+    "after": {
+      "policy": "记录显式偏好后（F3 本轮静音，其余参数与基线完全相同）",
+      "events": 4,
+      "seen_count": 4,
+      "trigger_count": 0,
+      "suppress_count": 4,
+      "event_total": 4,
+      "suppress_codes": [
+        "session_muted",
+        "session_muted",
+        "session_muted",
+        "session_muted"
+      ]
+    },
+    "comparison": {
+      "same_number_of_events": 4,
+      "disturbed_before": 4,
+      "disturbed_after": 0,
+      "suppressed_after": 4,
+      "conclusion": "同样的 4 次同类事件：修改前打扰 4 次，修改后打扰 0 次、压掉 4 次"
+    }
+  },
+  "cases": [
+    {
+      "case": "T1 四张新表 + 默认配置 v1 + 本轮（进程一轮）口径",
+      "pass": true,
+      "detail": "v1={'session_ttl_s': 900.0, 'snooze_s': 120.0, 'reason_mute_s': 86400.0, 'correct_mute_s': 300.0} session=sess-1c943c26 剩余=900s",
+      "attribution": "server",
+      "recorded_at": 1795573454.2514567,
+      "overview": {
+        "session_id": "sess-1c943c26",
+        "session_started_at": 1795573453.9168434,
+        "session_started_at_text": "2026-11-25 10:24:13",
+        "session_ttl_s": 900.0,
+        "session_remaining_s": 900,
+        "session_muted": false,
+        "muted_reasons": [],
+        "snoozed_events": [],
+        "preferences": [],
+        "count": 0,
+        "config_version": 1,
+        "params": {
+          "session_ttl_s": 900.0,
+          "snooze_s": 120.0,
+          "reason_mute_s": 86400.0,
+          "correct_mute_s": 300.0
+        },
+        "params_text": "本轮 900s · 稍后 120s · 原因静音 86400s · 纠正静音 300s"
+      },
+      "version_v1": {
+        "version": 1,
+        "created_at": 1795573454.1400285,
+        "created_at_text": "2026-11-25 10:24:14",
+        "source": "default",
+        "source_label": "默认配置快照",
+        "from_version": null,
+        "params": {
+          "session_ttl_s": 900.0,
+          "snooze_s": 120.0,
+          "reason_mute_s": 86400.0,
+          "correct_mute_s": 300.0
+        },
+        "preferences": [],
+        "note": "默认配置快照（本周起点）"
+      }
+    },
+    {
+      "case": "T2 事件签名稳定（同一张图同一原因 = 同一个事件）",
+      "pass": true,
+      "detail": "key=b7e5acbae94db430",
+      "attribution": "server",
+      "recorded_at": 1795573454.2514567
+    },
+    {
+      "case": "T3 修改前基线：4 次同类事件 → 4 次都真的打扰了用户",
+      "pass": true,
+      "detail": "trigger=+4 suppress=+0（默认策略会重复提醒）",
+      "attribution": "interaction",
+      "recorded_at": 1795573454.4465244,
+      "before_after": {
+        "policy": "默认策略（第 9 周记录级冷却，无显式偏好）",
+        "events": 4,
+        "seen_count": 4,
+        "trigger_count": 4,
+        "suppress_count": 0,
+        "event_total": 4,
+        "requests": [
+          "w12-blocked-1",
+          "w12-blocked-2",
+          "w12-blocked-3",
+          "w12-blocked-4"
+        ]
+      }
+    },
+    {
+      "case": "T4 同一事件重放：只增加观测计数，不重复弹提醒",
+      "pass": true,
+      "detail": "seen=2 trigger=1 suppress_code=already_asked",
+      "attribution": "server",
+      "recorded_at": 1795573454.4583268,
+      "event": {
+        "event_key": "9249443fbfa2c179",
+        "reason": "blocked",
+        "request_id": "w12-blocked-1",
+        "session_id": "sess-1c943c26",
+        "inquiry_id": "inq-a4ba6639ee",
+        "first_seen_at": 1795573454.2778375,
+        "last_seen_at": 1795573454.4465244,
+        "first_seen_at_text": "2026-11-25 10:24:14",
+        "seen_count": 2,
+        "trigger_count": 1,
+        "suppress_count": 1,
+        "last_suppress_code": "already_asked",
+        "last_suppress_at_text": "2026-11-25 10:24:14",
+        "last_suppress_pref": null,
+        "config_version": 1
+      }
+    },
+    {
+      "case": "T5 F3 忽略（这次不用提醒）→ 只静音本轮，到期时间=本轮结束",
+      "pass": true,
+      "detail": "scope=session expires=2026-11-25 10:39:13 v1→v2",
+      "attribution": "interaction",
+      "recorded_at": 1795573454.5189784,
+      "inquiry_id": "inq-08d1394ed8",
+      "preference": {
+        "action": "mute",
+        "expires_at": 1795574353.9168434,
+        "expires_at_text": "2026-11-25 10:39:13",
+        "from_version": 1,
+        "hint": "；已记录偏好：本轮静音（v1 → v2，至 2026-11-25 10:39:13）",
+        "kind": "ignore",
+        "pref_id": "pref-059516be71",
+        "scope": "session",
+        "scope_label": "本轮",
+        "version": 2
+      },
+      "preferences": [
+        {
+          "pref_id": "pref-059516be71",
+          "scope": "session",
+          "scope_label": "本轮",
+          "scope_key": "sess-1c943c26",
+          "action": "mute",
+          "reason": "blocked",
+          "request_id": "w12-blocked-5",
+          "event_key": "3daebcee23c6e572",
+          "session_id": "sess-1c943c26",
+          "inquiry_id": "inq-08d1394ed8",
+          "feedback": "ignore",
+          "feedback_label": "忽略（这次不用提醒）",
+          "channel": "ui",
+          "created_at": 1795573454.505195,
+          "created_at_text": "2026-11-25 10:24:14",
+          "expires_at": 1795574353.9168434,
+          "expires_at_text": "2026-11-25 10:39:13",
+          "remaining_s": 899,
+          "config_version": 2,
+          "note": "F3 忽略：本轮不再提醒，本轮结束自动恢复默认"
+        }
+      ]
+    },
+    {
+      "case": "T6 修改前后对照：同类事件打扰次数 4 → 0（全部被 G6 压掉）",
+      "pass": true,
+      "detail": "before trigger=+4 after trigger=+0 suppress=+4",
+      "attribution": "interaction",
+      "recorded_at": 1795573454.6199613,
+      "before_after": {
+        "before": {
+          "policy": "默认策略（第 9 周记录级冷却，无显式偏好）",
+          "events": 4,
+          "seen_count": 4,
+          "trigger_count": 4,
+          "suppress_count": 0,
+          "event_total": 4,
+          "requests": [
+            "w12-blocked-1",
+            "w12-blocked-2",
+            "w12-blocked-3",
+            "w12-blocked-4"
+          ]
+        },
+        "after": {
+          "policy": "记录显式偏好后（F3 本轮静音，其余参数与基线完全相同）",
+          "events": 4,
+          "seen_count": 4,
+          "trigger_count": 0,
+          "suppress_count": 4,
+          "event_total": 4,
+          "suppress_codes": [
+            "session_muted",
+            "session_muted",
+            "session_muted",
+            "session_muted"
+          ]
+        },
+        "comparison": {
+          "same_number_of_events": 4,
+          "disturbed_before": 4,
+          "disturbed_after": 0,
+          "suppressed_after": 4,
+          "conclusion": "同样的 4 次同类事件：修改前打扰 4 次，修改后打扰 0 次、压掉 4 次"
+        }
+      }
+    },
+    {
+      "case": "T7 查看并清除本轮偏好：清除后回到默认策略（仍会提醒，但不是永久关闭）",
+      "pass": true,
+      "detail": "revoke HTTP=200 生效偏好=0 条 → 下一条事件又触发询问",
+      "attribution": "interaction",
+      "recorded_at": 1795573454.679755,
+      "preferences_after_clear": [],
+      "inquiry": "inq-26a46ffa94"
+    },
+    {
+      "case": "T8 说“这类都别问” → 该类原因静音，同类原因下一条事件被压掉",
+      "pass": true,
+      "detail": "scope=event_reason suppressed=reason_muted",
+      "attribution": "interaction",
+      "recorded_at": 1795573454.7266357,
+      "text": "这类都别问了",
+      "preference": {
+        "pref_id": "pref-549500f21a",
+        "version": 4,
+        "from_version": 3,
+        "expires_at": 1795659854.6917439,
+        "expires_at_text": "2026-11-26 10:24:14",
+        "kind": "ignore",
+        "scope": "event_reason",
+        "scope_label": "该类原因",
+        "action": "mute",
+        "hint": "；已记录偏好：该类原因静音（v3 → v4，至 2026-11-26 10:24:14）"
+      }
+    },
+    {
+      "case": "T9 作用域不静默升级：'这次不用提醒'只写本轮，不写永久",
+      "pass": true,
+      "detail": "词表 → 作用域映射确定；所有静音都有到期时间",
+      "attribution": "rules",
+      "recorded_at": 1795573454.730657
+    },
+    {
+      "case": "T10 F5 恢复默认：撤销全部偏好 + 参数回到默认快照，提醒立刻恢复",
+      "pass": true,
+      "detail": "撤销 1 条偏好，配置 v4→v5；再说“恢复默认提醒”仍可用",
+      "attribution": "interaction",
+      "recorded_at": 1795573454.8287842,
+      "restore": {
+        "from_version": 4,
+        "message": "已恢复默认提醒：撤销 1 条偏好，配置版本 v4 → v5",
+        "params": {
+          "correct_mute_s": 300.0,
+          "reason_mute_s": 86400.0,
+          "session_ttl_s": 900.0,
+          "snooze_s": 120.0
+        },
+        "revoked": 1,
+        "version": 5
+      },
+      "nl_query": {
+        "intent": "reminder_preference",
+        "message": "已恢复默认提醒：本轮之前的静音偏好全部清除，配置版本升到 v6",
+        "preference": {
+          "from_version": 5,
+          "matched_feedback": "restore_default",
+          "message": "已恢复默认提醒：本轮之前的静音偏好全部清除，配置版本升到 v6",
+          "ok": true,
+          "params": {
+            "correct_mute_s": 300.0,
+            "reason_mute_s": 86400.0,
+            "session_ttl_s": 900.0,
+            "snooze_s": 120.0
+          },
+          "revoked": 0,
+          "version": 6
+        },
+        "processing_time_ms": 51.51,
+        "request_id": "9a5fde06",
+        "run_location": "server",
+        "status": "config_updated",
+        "success": true
+      }
+    },
+    {
+      "case": "T11 F2 纠正（其实可用）→ 该类原因静音；纠错不写人工纠错表",
+      "pass": true,
+      "detail": "静音 blur 300s；human_feedbacks 仍为 0 条（保存反馈≠在线学习）",
+      "attribution": "interaction",
+      "recorded_at": 1795573454.921253,
+      "preference": {
+        "pref_id": "pref-fd8ba8d07e",
+        "scope": "event_reason",
+        "scope_label": "该类原因",
+        "scope_key": "blur",
+        "action": "mute",
+        "reason": "blur",
+        "request_id": "w12-blur-13",
+        "event_key": "25fd8a4ffef4d9a4",
+        "session_id": null,
+        "inquiry_id": "inq-55e45bf409",
+        "feedback": "correct",
+        "feedback_label": "纠正（其实可用）",
+        "channel": "ui",
+        "created_at": 1795573454.8838973,
+        "created_at_text": "2026-11-25 10:24:14",
+        "expires_at": 1795573754.8838973,
+        "expires_at_text": "2026-11-25 10:29:14",
+        "remaining_s": 300,
+        "config_version": 7,
+        "note": "F2 纠正：该类原因误判，暂时静音"
+      }
+    },
+    {
+      "case": "T12 F4 稍后：到期前压住该事件，到期后提醒恢复",
+      "pass": true,
+      "detail": "稍后命中 60s → 到期后 check_gate=None",
+      "attribution": "interaction",
+      "recorded_at": 1795573455.043456,
+      "gate": {
+        "code": "event_snoozed",
+        "pref_id": "pref-4702caeaff",
+        "detail": "用户选择稍后再说，还没到时间",
+        "until": 1795573514.9723048,
+        "remaining_s": 60,
+        "scope": "event_key",
+        "feedback": "snooze"
+      },
+      "gate_after": null
+    },
+    {
+      "case": "T13 F1 确认重拍：自动撤销该事件的“稍后再说”（没有则不写配置历史）",
+      "pass": true,
+      "detail": "retake=4236c5bf 撤销 1 条稍后",
+      "attribution": "interaction",
+      "recorded_at": 1795573455.1403718,
+      "inquiry_id": "inq-f5e89bf4f6"
+    },
+    {
+      "case": "T14 本轮结束自动恢复默认：新一轮进程不继承上轮静音，TTL 到期自动失效",
+      "pass": true,
+      "detail": "新一轮=sess-f34e7185 → 失效；TTL 到期清除 1 条",
+      "attribution": "rules",
+      "recorded_at": 1795573455.184511,
+      "new_round": {
+        "session_id": "sess-f34e7185",
+        "session_started_at": 1795573455.165239,
+        "session_started_at_text": "2026-11-25 10:24:15",
+        "session_ttl_s": 900.0,
+        "session_remaining_s": 900,
+        "session_muted": false,
+        "muted_reasons": [],
+        "snoozed_events": [],
+        "preferences": [],
+        "count": 0,
+        "config_version": 13,
+        "params": {
+          "session_ttl_s": 900.0,
+          "snooze_s": 120.0,
+          "reason_mute_s": 86400.0,
+          "correct_mute_s": 300.0
+        },
+        "params_text": "本轮 900s · 稍后 120s · 原因静音 86400s · 纠正静音 300s"
+      },
+      "expired": 1
+    },
+    {
+      "case": "T15 配置版本：参数变更即新版本、生效值可查、回退是 append-only 的新版本",
+      "pass": true,
+      "detail": "参数 snooze_s→60 → 偏好 60s；回退 v16→v17（历史 13→17 条，只增不减）",
+      "attribution": "server",
+      "recorded_at": 1795573455.2720072,
+      "rollback": {
+        "from_version": 16,
+        "message": "已回退到 v1，生成新版本 v17（历史保留）",
+        "restored": 0,
+        "revoked": 0,
+        "rolled_back_to": 1,
+        "version": 17
+      },
+      "params": {
+        "session_ttl_s": 900.0,
+        "snooze_s": 60.0,
+        "reason_mute_s": 86400.0,
+        "correct_mute_s": 300.0
+      }
+    },
+    {
+      "case": "T16 配置历史可取证：每条都有来源/参数快照/说明",
+      "pass": true,
+      "detail": "来源集合=['confirm', 'correct', 'default', 'ignore', 'params', 'restore_default', 'revoke', 'rollback', 'snooze']",
+      "attribution": "server",
+      "recorded_at": 1795573455.2720072,
+      "versions": [
+        {
+          "version": 17,
+          "created_at": 1795573455.259775,
+          "created_at_text": "2026-11-25 10:24:15",
+          "source": "rollback",
+          "source_label": "配置回退",
+          "from_version": 16,
+          "params": {
+            "session_ttl_s": 900.0,
+            "snooze_s": 120.0,
+            "reason_mute_s": 86400.0,
+            "correct_mute_s": 300.0
+          },
+          "preferences": [],
+          "note": "回到本周起点"
+        },
+        {
+          "version": 16,
+          "created_at": 1795573455.2121582,
+          "created_at_text": "2026-11-25 10:24:15",
+          "source": "restore_default",
+          "source_label": "恢复默认",
+          "from_version": 15,
+          "params": {
+            "session_ttl_s": 900.0,
+            "snooze_s": 120.0,
+            "reason_mute_s": 86400.0,
+            "correct_mute_s": 300.0
+          },
+          "preferences": [],
+          "note": "恢复默认：清空全部提醒偏好，参数回到默认快照"
+        },
+        {
+          "version": 15,
+          "created_at": 1795573455.198035,
+          "created_at_text": "2026-11-25 10:24:15",
+          "source": "snooze",
+          "source_label": "稍后（待会儿再问）",
+          "from_version": 14,
+          "params": {
+            "session_ttl_s": 900.0,
+            "snooze_s": 60.0,
+            "reason_mute_s": 86400.0,
+            "correct_mute_s": 300.0
+          },
+          "preferences": [
+            {
+              "pref_id": "pref-787bcc5a6f",
+              "scope": "event_key",
+              "scope_key": "5c8e7453c6d0ccb9",
+              "action": "snooze",
+              "reason": "blocked",
+              "request_id": "img-param",
+              "event_key": null,
+              "session_id": null,
+              "inquiry_id": null,
+              "feedback": "snooze",
+              "channel": "ui",
+              "expires_at": 1795573515.198035
+            }
+          ],
+          "note": "这条事件稍后：5c8e7453c6d0ccb9"
+        },
+        {
+          "version": 14,
+          "created_at": 1795573455.1861045,
+          "created_at_text": "2026-11-25 10:24:15",
+          "source": "params",
+          "source_label": "参数变更",
+          "from_version": 13,
+          "params": {
+            "session_ttl_s": 900.0,
+            "snooze_s": 60.0,
+            "reason_mute_s": 86400.0,
+            "correct_mute_s": 300.0
+          },
+          "preferences": [],
+          "note": "week12 缩短稍后"
+        },
+        {
+          "version": 13,
+          "created_at": 1795573455.1511254,
+          "created_at_text": "2026-11-25 10:24:15",
+          "source": "ignore",
+          "source_label": "忽略（这次不用提醒）",
+          "from_version": 12,
+          "params": {
+            "session_ttl_s": 900.0,
+            "snooze_s": 120.0,
+            "reason_mute_s": 86400.0,
+            "correct_mute_s": 300.0
+          },
+          "preferences": [
+            {
+              "pref_id": "pref-b8787cdc26",
+              "scope": "session",
+              "scope_key": "sess-1c943c26",
+              "action": "mute",
+              "reason": null,
+              "request_id": null,
+              "event_key": null,
+              "session_id": "sess-1c943c26",
+              "inquiry_id": null,
+              "feedback": "ignore",
+              "channel": "ui",
+              "expires_at": 1795574353.9168434
+            }
+          ],
+          "note": "本轮静音：sess-1c943c26"
+        },
+        {
+          "version": 12,
+          "created_at": 1795573455.1403718,
+          "created_at_text": "2026-11-25 10:24:15",
+          "source": "restore_default",
+          "source_label": "恢复默认",
+          "from_version": 11,
+          "params": {
+            "session_ttl_s": 900.0,
+            "snooze_s": 120.0,
+            "reason_mute_s": 86400.0,
+            "correct_mute_s": 300.0
+          },
+          "preferences": [],
+          "note": "恢复默认：清空全部提醒偏好，参数回到默认快照"
+        },
+        {
+          "version": 11,
+          "created_at": 1795573455.1274688,
+          "created_at_text": "2026-11-25 10:24:15",
+          "source": "confirm",
+          "source_label": "确认（采纳提醒）",
+          "from_version": 10,
+          "params": {
+            "session_ttl_s": 900.0,
+            "snooze_s": 120.0,
+            "reason_mute_s": 86400.0,
+            "correct_mute_s": 300.0
+          },
+          "preferences": [],
+          "note": "用户选择重拍，该事件的'稍后'偏好自动失效"
+        },
+        {
+          "version": 10,
+          "created_at": 1795573455.093431,
+          "created_at_text": "2026-11-25 10:24:15",
+          "source": "snooze",
+          "source_label": "稍后（待会儿再问）",
+          "from_version": 9,
+          "params": {
+            "session_ttl_s": 900.0,
+            "snooze_s": 120.0,
+            "reason_mute_s": 86400.0,
+            "correct_mute_s": 300.0
+          },
+          "preferences": [
+            {
+              "pref_id": "pref-3c257ce6b7",
+              "scope": "event_key",
+              "scope_key": "731263c246f128af",
+              "action": "snooze",
+              "reason": "capture_failed",
+              "request_id": "w12-capture_failed-17",
+              "event_key": null,
+              "session_id": null,
+              "inquiry_id": null,
+              "feedback": "snooze",
+              "channel": "ui",
+              "expires_at": 1795573515.093431
+            }
+          ],
+          "note": "这条事件稍后：731263c246f128af"
+        },
+        {
+          "version": 9,
+          "created_at": 1795573454.9723048,
+          "created_at_text": "2026-11-25 10:24:14",
+          "source": "snooze",
+          "source_label": "稍后（待会儿再问）",
+          "from_version": 8,
+          "params": {
+            "session_ttl_s": 900.0,
+            "snooze_s": 120.0,
+            "reason_mute_s": 86400.0,
+            "correct_mute_s": 300.0
+          },
+          "preferences": [
+            {
+              "pref_id": "pref-4702caeaff",
+              "scope": "event_key",
+              "scope_key": "a117238855614068",
+              "action": "snooze",
+              "reason": "dark",
+              "request_id": "w12-dark-15",
+              "event_key": null,
+              "session_id": null,
+              "inquiry_id": null,
+              "feedback": "snooze",
+              "channel": "ui",
+              "expires_at": 1795573514.9723048
+            }
+          ],
+          "note": "这条事件稍后：a117238855614068"
+        },
+        {
+          "version": 8,
+          "created_at": 1795573454.921253,
+          "created_at_text": "2026-11-25 10:24:14",
+          "source": "restore_default",
+          "source_label": "恢复默认",
+          "from_version": 7,
+          "params": {
+            "session_ttl_s": 900.0,
+            "snooze_s": 120.0,
+            "reason_mute_s": 86400.0,
+            "correct_mute_s": 300.0
+          },
+          "preferences": [],
+          "note": "恢复默认：清空全部提醒偏好，参数回到默认快照"
+        },
+        {
+          "version": 7,
+          "created_at": 1795573454.8838973,
+          "created_at_text": "2026-11-25 10:24:14",
+          "source": "correct",
+          "source_label": "纠正（其实可用）",
+          "from_version": 6,
+          "params": {
+            "session_ttl_s": 900.0,
+            "snooze_s": 120.0,
+            "reason_mute_s": 86400.0,
+            "correct_mute_s": 300.0
+          },
+          "preferences": [
+            {
+              "pref_id": "pref-fd8ba8d07e",
+              "scope": "event_reason",
+              "scope_key": "blur",
+              "action": "mute",
+              "reason": "blur",
+              "request_id": "w12-blur-13",
+              "event_key": "25fd8a4ffef4d9a4",
+              "session_id": null,
+              "inquiry_id": "inq-55e45bf409",
+              "feedback": "correct",
+              "channel": "ui",
+              "expires_at": 1795573754.8838973
+            }
+          ],
+          "note": "该类原因静音：blur"
+        },
+        {
+          "version": 6,
+          "created_at": 1795573454.7772732,
+          "created_at_text": "2026-11-25 10:24:14",
+          "source": "restore_default",
+          "source_label": "恢复默认",
+          "from_version": 5,
+          "params": {
+            "session_ttl_s": 900.0,
+            "snooze_s": 120.0,
+            "reason_mute_s": 86400.0,
+            "correct_mute_s": 300.0
+          },
+          "preferences": [],
+          "note": "恢复默认：清空全部提醒偏好，参数回到默认快照"
+        }
+      ]
+    },
+    {
+      "case": "T17 偏好/配置接口参数校验",
+      "pass": true,
+      "detail": "scope=400 key=400 param=400 rollback=404/400",
+      "attribution": "server",
+      "recorded_at": 1795573455.2739897
+    },
+    {
+      "case": "T18 偏好/配置读写不改原始观测与人工纠错表",
+      "pass": true,
+      "detail": "counts={'imu_data': 0, 'image_records': 19, 'inference_results': 0, 'human_feedbacks': 0}",
+      "attribution": "server",
+      "recorded_at": 1795573455.3418183
+    },
+    {
+      "case": "T19 R10 偏好一致：本轮静音压掉“拍一张”追问并如实说明，恢复默认后追问回来",
+      "pass": true,
+      "detail": "默认=capture → 静音=None → 恢复=capture（配置 v24）",
+      "attribution": "interaction",
+      "recorded_at": 1795573455.410514,
+      "default_followup": {
+        "ask": "要现在拍一张画面确认吗？",
+        "why": "画面是快照，且当前证据已不足或可能变化；补一张新图能改变回答。",
+        "action": "capture",
+        "options": [
+          {
+            "id": "retake",
+            "label": "现在拍一张",
+            "action": "capture"
+          },
+          {
+            "id": "dismiss",
+            "label": "先这样",
+            "action": "dismiss"
+          }
+        ]
+      },
+      "muted_followup": null,
+      "preference": {
+        "blocked": true,
+        "session_muted": true,
+        "muted_reasons": [],
+        "muted_reason_labels": [],
+        "config_version": 24,
+        "session_remaining_s": 900
+      },
+      "answer": "最近一次取图失败（blocked）；无法确认当前环境。 本系统不做危险/安全判断（R4），上述内容不能作为安全或危险的结论。 按你之前的反馈（作用域：本轮，剩余 900 秒），这里不再提示重拍（配置 v24）；说“恢复默认提醒”随时可以改回来。"
+    },
+    {
+      "case": "T20 R10 只压取图追问，采样/来源/澄清类追问不受偏好影响",
+      "pass": true,
+      "detail": "本轮静音生效时：motion 追问仍为 collect，location 追问仍为 clarify",
+      "attribution": "rules",
+      "recorded_at": 1795573455.450709,
+      "muted_preference": {
+        "blocked": false
+      },
+      "motion_followup": {
+        "ask": "设备现在还在采样吗？可以重新采集一次来确认。",
+        "why": "运动状态缺少足够的当前样本；重新采集能得到新的观测。",
+        "action": "collect",
+        "options": [
+          {
+            "id": "collect",
+            "label": "重新采集一次",
+            "action": "collect"
+          },
+          {
+            "id": "sources",
+            "label": "查看来源状态",
+            "action": "sources"
+          },
+          {
+            "id": "dismiss",
+            "label": "先这样",
+            "action": "dismiss"
+          }
+        ]
+      },
+      "location_followup": {
+        "ask": "你是指最近一次画面，还是想知道设备位置？本机没有定位来源。",
+        "why": "无法给出坐标；只能核对画面或说明缺失。",
+        "action": "clarify",
+        "options": [
+          {
+            "id": "retake",
+            "label": "拍一张画面",
+            "action": "capture"
+          },
+          {
+            "id": "dismiss",
+            "label": "先这样",
+            "action": "dismiss"
+          }
+        ]
+      }
+    }
+  ]
+}

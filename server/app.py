@@ -1271,6 +1271,19 @@ def create_image_task(device_id="esp32-s3-eye", source="device"):
     return request_id, now
 
 
+# ==================== 第 12 周：用户纠错影响后续提醒 ====================
+# reminder_pref 自己建四张表（提醒偏好、事件计数、反馈流水、配置版本），
+# 不改动任何已有表；inquiry 单向依赖它（G6 偏好门 + 重复提醒计数），它不认识询问状态机。
+# 必须在 inquiry_mod.init_db() 之前建好，询问模块才查得到偏好表。
+import reminder_pref as pref_mod  # noqa: E402
+
+pref_mod.configure(
+    DB_FILE,
+    log=lambda msg, rid=None: logger.info(msg, extra={"request_id": rid or "-"}),
+)
+app.register_blueprint(pref_mod.bp)
+pref_mod.init_db()
+
 # ==================== 第 9 周：画面不可用的主动询问 ====================
 # 询问模块独立成表（image_inquiries），不改动上面四张已有表的结构；
 # 重拍复用上面的 create_image_task（唯一的取图入口），因此重拍走的是
@@ -2217,6 +2230,21 @@ def nl_query():
 
     logger.info(f"开始处理：{user_text}", extra={"request_id": request_id})
 
+    # 第 12 周：先给"恢复默认提醒 / 取消静音"这类配置指令让路。
+    # 它不针对某一条询问，所以不走询问答复入口；仍然只做词表匹配，不新增意图枚举。
+    restored = pref_mod.try_config_from_text(user_text, channel="ui")
+    if restored:
+        return jsonify({
+            "request_id": request_id,
+            "status": "config_updated",
+            "intent": "reminder_preference",
+            "success": True,
+            "message": restored.get("message", "已恢复默认提醒"),
+            "preference": restored,
+            "run_location": "server",
+            "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+        }), 200
+
     # 第 9 周：有待答复的询问时，"重拍 / 不用了 / 其实可用"先当成本次询问的答复，
     # 不进入意图分类（避免新增意图枚举，改动第 6 周的意图契约）。
     answered = inquiry_mod.try_answer_from_text(user_text, channel="ui")
@@ -2542,6 +2570,21 @@ def voice_query():
             "source": "stt_silence",
             "stage": "stt"
         }), 400
+
+    # 第 12 周：语音里的"恢复默认提醒 / 取消静音"先于询问答复处理（同 nl_text 口径）
+    restored = pref_mod.try_config_from_text(text, channel="voice")
+    if restored:
+        return jsonify({
+            "input": text,
+            "status": "config_updated",
+            "intent": "reminder_preference",
+            "success": True,
+            "message": restored.get("message", "已恢复默认提醒"),
+            "preference": restored,
+            "audio": None,
+            "tts_source": "not_needed",
+            "run_location": "server",
+        }), 200
 
     # 第 9 周：语音答复协同——"重拍 / 不用了 / 其实可用"直接答复当前询问
     answered = inquiry_mod.try_answer_from_text(text, channel="voice")

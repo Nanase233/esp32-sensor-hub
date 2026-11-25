@@ -1232,6 +1232,148 @@
             color: #475569;
             font-size: 0.7em;
         }
+
+        /* ===== 第 12 周：用户纠错影响后续提醒（偏好 / 配置版本 / 前后对照） ===== */
+        .pref-status {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 18px;
+            margin: 12px 0 10px;
+            color: #cbd5e1;
+            font-size: 0.78em;
+        }
+
+        .pref-status b { color: #f1f5f9; font-weight: 600; }
+
+        .pref-list { display: grid; gap: 6px; margin-bottom: 10px; }
+
+        .pref-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            border-left: 3px solid #f59e0b;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 0.78em;
+            color: #cbd5e1;
+        }
+
+        .pref-row.expired { border-left-color: #475569; opacity: 0.7; }
+
+        .pref-scope {
+            background: #78350f;
+            color: #fcd34d;
+            border-radius: 4px;
+            padding: 1px 6px;
+            font-weight: 700;
+            font-size: 0.92em;
+        }
+
+        .pref-action {
+            background: #1e3a8a;
+            color: #bfdbfe;
+            border-radius: 4px;
+            padding: 1px 6px;
+            font-size: 0.92em;
+        }
+
+        .pref-detail { flex: 1; min-width: 160px; color: #94a3b8; }
+
+        .pref-row button,
+        .pref-actions button,
+        .pref-versions button {
+            background: #1e293b;
+            color: #cbd5e1;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 0.92em;
+            cursor: pointer;
+        }
+
+        .pref-row button:hover,
+        .pref-actions button:hover,
+        .pref-versions button:hover { border-color: #3b82f6; color: #e2e8f0; }
+
+        .pref-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .pref-msg { color: #6ee7b7; font-size: 0.78em; min-height: 1.4em; }
+
+        .pref-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .pref-stat {
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            border-radius: 8px;
+            padding: 8px 10px;
+        }
+
+        .pref-stat .label { color: #64748b; font-size: 0.72em; }
+
+        .pref-stat .value { color: #f1f5f9; font-size: 1.15em; font-weight: 700; }
+
+        .pref-stat .hint { color: #94a3b8; font-size: 0.68em; line-height: 1.4; }
+
+        .pref-versions {
+            margin-top: 12px;
+            border-top: 1px dashed #334155;
+            padding-top: 10px;
+        }
+
+        .pref-version {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            padding: 6px 0;
+            border-bottom: 1px dashed #1e293b;
+            font-size: 0.76em;
+            color: #94a3b8;
+        }
+
+        .pref-version:last-child { border-bottom: none; }
+
+        .pref-version .vno { color: #93c5fd; font-weight: 700; }
+
+        .pref-version .vcur { color: #6ee7b7; font-weight: 700; }
+
+        .pref-section-title {
+            color: #94a3b8;
+            font-size: 0.74em;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            margin: 12px 0 6px;
+        }
+
+        /* 第 12 周：询问卡片里的作用域选择（偏好作用范围由用户自己说） */
+        .inquiry-scope {
+            color: #94a3b8;
+            font-size: 12px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .inquiry-scope select {
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            color: #e2e8f0;
+            padding: 3px 6px;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
@@ -1286,6 +1428,38 @@
             </div>
             <div id="context-answer" class="context-answer">
                 <div class="empty-text">还没有上下文解释；点击上面的问题开始。</div>
+            </div>
+        </section>
+
+        <!-- 第 12 周：用户纠错影响后续提醒（可查看、可撤回的本轮偏好 + 配置版本回退） -->
+        <section class="context-section card" id="preferences">
+            <div class="context-head">
+                <div class="card-title" style="margin-bottom:0;">
+                    <span class="icon">🔕</span> 提醒偏好与配置版本
+                </div>
+                <div class="context-sub">
+                    反馈只落成有限几种偏好（本轮 / 该类原因 / 这条事件 / 这张图 / 稍后）；
+                    单条可撤回，配置历史只追加不删除，回退＝按旧快照生效并生成新版本。
+                </div>
+            </div>
+            <div class="pref-status" id="pref-status">
+                <span>正在读取提醒偏好…</span>
+            </div>
+            <div class="pref-actions">
+                <button onclick="clearSessionPrefs()">清除本轮偏好</button>
+                <button onclick="restoreDefaultPrefs()">恢复默认提醒</button>
+                <button onclick="refreshPreferences()">刷新</button>
+            </div>
+            <div class="pref-msg" id="pref-msg"></div>
+            <div class="pref-section-title">当前生效的偏好（每一条都可以单独撤回）</div>
+            <div class="pref-list" id="pref-list">
+                <div class="ctx-pending ctx-hint">当前没有任何显式偏好，提醒按默认策略执行。</div>
+            </div>
+            <div class="pref-section-title">前后对照：观测到的事件 vs 真正打扰的次数</div>
+            <div class="pref-stats" id="pref-stats"></div>
+            <div class="pref-versions">
+                <div class="pref-section-title" style="margin-top:0;">配置版本记录（append-only，可回退）</div>
+                <div id="pref-version-list"></div>
             </div>
         </section>
 
@@ -1393,9 +1567,14 @@
                         <div class="inquiry-actions">
                             <button class="btn-primary" onclick="answerInquiry('retake')">重拍一张</button>
                             <button onclick="answerInquiry('decline')">不用了</button>
+                            <button onclick="answerInquiry('snooze')">稍后再说</button>
                             <button onclick="answerInquiry('usable')">其实可用</button>
                             <label class="inquiry-mute">
                                 <input type="checkbox" id="inquiry-mute"> 本次不再询问
+                            </label>
+                            <!-- 第 12 周：偏好作用域由用户自己选；默认"仅本次"＝第 9 周行为 -->
+                            <label class="inquiry-scope">生效范围
+                                <select id="inquiry-scope"></select>
                             </label>
                         </div>
                         <div class="inquiry-hint" id="inquiry-hint"></div>
@@ -2030,12 +2209,14 @@
         loadSamplesCompare();   // 第 8 周：四类样例对照
         refreshInquiry();       // 第 9 周：待答复的主动询问
         updateSources();        // 第 10 周：多来源状态与年龄
+        refreshPreferences();   // 第 12 周：提醒偏好、配置版本与前后对照
         setInterval(updateStats, 5000);
         setInterval(updateTaskList, 2000);
         setInterval(updateHelpList, 2000);
         setInterval(refreshInquiry, 1500);
         setInterval(updateSources, 2000);
         setInterval(tickSourceAges, 1000);
+        setInterval(refreshPreferences, 5000);
 
         // 远程采集
         async function collectOnce() {
@@ -2267,9 +2448,27 @@
                 const resp = await fetch('/api/inquiry/pending');
                 if (!resp.ok) return;
                 const data = await resp.json();
+                // 第 12 周：作用域下拉由服务端 config.scopes 驱动（本机标签取自 reminder_pref）
+                if (data.config && data.config.scopes) renderInquiryScopeOptions(data.config.scopes);
                 if (!data.inquiry) { hideInquiry(); return; }
                 renderInquiry(data.inquiry);
             } catch (e) { /* 询问面板失败不影响其它面板 */ }
+        }
+
+        // 第 12 周：答复这一次询问时，偏好的生效范围由用户自己选。
+        // 默认"仅本次"＝不写任何偏好，与第 9 周行为逐字节一致；其余四项各对应一种显式作用域。
+        const INQUIRY_SCOPE_ORDER = ['session', 'event_reason', 'event_key', 'request_id'];
+
+        function renderInquiryScopeOptions(scopes) {
+            const sel = document.getElementById('inquiry-scope');
+            if (!sel) return;
+            const labels = {'': '仅本次（不改变后续提醒）'};
+            (scopes || []).forEach(s => { labels[s.scope] = s.label; });
+            const values = [''].concat(INQUIRY_SCOPE_ORDER.filter(v => labels[v]));
+            // 选项集固定，重建会打断用户选择：只在数量变化时重建
+            if (sel.options.length === values.length) return;
+            sel.innerHTML = values.map(v =>
+                `<option value="${esc(v)}">${esc(labels[v])}</option>`).join('');
         }
 
         function inquiryTriggerLabel(trigger) {
@@ -2324,17 +2523,32 @@
             currentInquiry = null;
         }
 
-        async function answerInquiry(decision) {
+        async function answerInquiry(action) {
             if (!currentInquiry) return;
             const inq = currentInquiry;
-            const mute = decision === 'decline' && document.getElementById('inquiry-mute').checked;
+            const muteEl = document.getElementById('inquiry-mute');
+            const scopeEl = document.getElementById('inquiry-scope');
+            const scope = scopeEl ? scopeEl.value : '';
+            // decision 仍是第 9 周三档；"稍后再说"只是 decline + F4 稍后，不新增状态机分支
+            const body = {decision: action === 'snooze' ? 'decline' : action, channel: 'ui'};
+            if (action === 'snooze') {
+                body.feedback = 'snooze';
+                body.scope = 'event_key';
+            } else {
+                body.mute = action === 'decline' && !!(muteEl && muteEl.checked);
+                // 第 12 周：用户显式选了生效范围才写偏好；选"仅本次"时 feedback/scope 全空
+                if (scope) {
+                    body.feedback = action === 'usable' ? 'correct' : 'ignore';
+                    body.scope = scope;
+                }
+            }
             const buttons = document.querySelectorAll('#inquiry-card button');
             buttons.forEach(b => b.disabled = true);
             try {
                 const resp = await fetch(`/api/inquiry/${inq.inquiry_id}/answer`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({decision, channel: 'ui', mute})
+                    body: JSON.stringify(body)
                 });
                 const r = await resp.json();
 
@@ -2348,9 +2562,13 @@
                 if (!resp.ok) throw new Error(r.error || '答复失败');
 
                 document.getElementById('inquiry-hint').textContent = r.message || '已记录';
-                const retakeTask = (decision === 'retake') ? r.new_image_task : null;
+                const retakeTask = (action === 'retake') ? r.new_image_task : null;
                 hideInquiry();
+                if (muteEl) muteEl.checked = false;
+                if (scopeEl) scopeEl.value = '';
                 if (retakeTask) await watchRetake(retakeTask);
+                // 偏好会立刻改变后续提醒策略：顺手刷新第 12 周面板
+                if (body.feedback || body.mute) refreshPreferences();
             } catch (e) {
                 document.getElementById('inquiry-hint').textContent = `答复失败：${e.message}`;
             } finally {
@@ -2383,6 +2601,130 @@
                 } catch (e) { /* 继续轮询 */ }
             }
             statusEl.textContent = `重拍超时 · 请求 ${requestId}`;
+        }
+
+        // ==================== 第 12 周：用户纠错影响后续提醒 ====================
+        // 偏好的权威在 server/reminder_pref.py：前端只做三件事 ——
+        //   1) 查看当前生效的偏好（本轮 / 该类原因 / 这条事件 / 这张图 / 稍后）
+        //   2) 单条撤回，或一键清除本轮、恢复默认
+        //   3) 看配置版本历史并回退（回退＝按旧快照重新生效并追加新版本，历史不删）
+        // "前后对照"用的是 reminder_events 计数：seen＝观测到几次，trigger＝真正打扰几次。
+
+        // 原因短标签（与 reminder_pref.REASON_LABELS 对齐）；仅用于展示 scope_key
+        const PREF_REASON_LABELS = {
+            blocked: '画面被遮挡', dark: '画面过暗', blur: '画面模糊',
+            capture_failed: '采集失败', decode_failed: '图像无法解码',
+            model_unavailable: '视觉服务不可用',
+        };
+
+        function prefRemainingText(p) {
+            if (p.remaining_s != null) return `剩余 ${p.remaining_s}s`;
+            if (p.scope === 'session') return '本轮结束自动失效';
+            return '未设定到期';
+        }
+
+        async function refreshPreferences() {
+            try {
+                const resp = await fetch('/api/preferences');
+                if (!resp.ok) return;
+                renderPreferences(await resp.json());
+            } catch (e) { /* 偏好面板失败不影响其它面板 */ }
+        }
+
+        function renderPreferences(view) {
+            const status = document.getElementById('pref-status');
+            const params = view.params || {};
+            status.innerHTML = [
+                `<span>本轮 <b>${esc(view.session_id)}</b> 剩余 <b>${esc(view.session_remaining_s)}s</b>（TTL ${esc(params.session_ttl_s)}s）</span>`,
+                `<span>配置版本 <b>v${esc(view.config_version)}</b></span>`,
+                `<span>生效偏好 <b>${esc(view.count)}</b> 条</span>`,
+                `<span>本轮静音 <b>${view.session_muted ? '是' : '否'}</b></span>`,
+                `<span>参数：${esc(view.params_text)}</span>`,
+            ].join('');
+
+            const list = document.getElementById('pref-list');
+            const prefs = view.preferences || [];
+            if (!prefs.length) {
+                list.innerHTML = '<div class="ctx-pending ctx-hint">当前没有任何显式偏好，'
+                    + '提醒按默认策略（第 9 周冷却）执行。</div>';
+            } else {
+                list.innerHTML = prefs.map(p => {
+                    const target = p.scope === 'event_reason'
+                        ? (PREF_REASON_LABELS[p.scope_key] || p.scope_key)
+                        : p.scope_key;
+                    return `<div class="pref-row">
+                        <span class="pref-scope">${esc(p.scope_label)}</span>
+                        <span class="pref-action">${esc(p.action === 'snooze' ? '稍后再说' : '静音')}</span>
+                        <span class="pref-detail">${esc(target)} · ${esc(p.feedback_label)}
+                            · 来自${esc({ui: '界面', voice: '语音', device_key: '板载按键', system: '系统'}[p.channel] || p.channel)}
+                            · ${esc(prefRemainingText(p))} · 至 ${esc(p.expires_at_text || '本轮结束')}
+                            · v${esc(p.config_version)}</span>
+                        <button onclick="revokePreference('${esc(p.pref_id)}')">撤回</button>
+                    </div>`;
+                }).join('');
+            }
+
+            const s = view.stats || {};
+            document.getElementById('pref-stats').innerHTML = [
+                ['观测到的事件次数', s.seen_count, 'reminder_events.seen_count'],
+                ['真正打扰的次数', s.trigger_count, '弹出询问/播报的实际次数'],
+                ['被抑制的重复提醒', s.suppress_count, '同一事件再次出现但没再打扰'],
+                ['重复提醒减少', s.repeat_count, 'seen − trigger，越小越安静'],
+                ['事件总数', s.event_total, '按 request_id + reason 去重'],
+            ].map(x => `<div class="pref-stat">
+                    <div class="label">${esc(x[0])}</div>
+                    <div class="value">${esc(x[1] == null ? '--' : x[1])}</div>
+                    <div class="hint">${esc(x[2])}</div>
+                </div>`).join('');
+
+            const versions = view.versions || [];
+            document.getElementById('pref-version-list').innerHTML = versions.map(v => {
+                const isCurrent = v.version === view.config_version;
+                return `<div class="pref-version">
+                    <span class="${isCurrent ? 'vcur' : 'vno'}">v${esc(v.version)}</span>
+                    <span>${esc(v.created_at_text)}</span>
+                    <span>${esc(v.source_label)}</span>
+                    <span style="flex:1;min-width:160px;">${esc(v.note || '')}
+                        （偏好 ${esc((v.preferences || []).length)} 条）</span>
+                    ${isCurrent ? '<span>当前</span>'
+                        : `<button onclick="rollbackVersion(${esc(v.version)})">回退到此版本</button>`}
+                </div>`;
+            }).join('') || '<div class="ctx-pending ctx-hint">暂无配置版本记录。</div>';
+        }
+
+        async function revokePreference(prefId) {
+            await prefPost(`/api/preferences/${prefId}/revoke`, {}, `已撤回偏好 ${prefId}`);
+        }
+
+        async function clearSessionPrefs() {
+            await prefPost('/api/preferences/session/clear', {}, '已清除本轮提醒偏好');
+        }
+
+        async function restoreDefaultPrefs() {
+            await prefPost('/api/preferences/restore_default', {}, '已恢复默认提醒');
+        }
+
+        async function rollbackVersion(toVersion) {
+            await prefPost('/api/config/rollback', {to_version: toVersion},
+                `已回退到 v${toVersion}`);
+        }
+
+        // 偏好类操作统一走这里：成功就刷新面板，失败只在面板内提示，不打断其它功能
+        async function prefPost(url, body, fallbackMsg) {
+            const msg = document.getElementById('pref-msg');
+            try {
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body || {})
+                });
+                const r = await resp.json();
+                if (!resp.ok) throw new Error(r.error || '操作失败');
+                msg.textContent = r.message || fallbackMsg;
+            } catch (e) {
+                msg.textContent = `操作失败：${e.message}`;
+            }
+            refreshPreferences();
         }
 
         // ==================== 第 8 周：视觉推理结果反馈与人工纠错 ====================
@@ -2856,6 +3198,17 @@
                         renderContext(result.context);
                         const section = document.getElementById('context');
                         if (section) section.scrollIntoView({behavior: 'smooth', block: 'start'});
+                        return;
+                    }
+
+                    // 第 12 周：文字里说"恢复默认提醒"等偏好指令 → 刷新偏好面板并定位过去
+                    if (result.intent === 'reminder_preference') {
+                        addNlMessage(esc(result.message || '已更新提醒偏好'),
+                            'assistant',
+                            `提醒偏好 · 配置 v${esc((result.preference || {}).version || '')}`);
+                        refreshPreferences();
+                        const prefSection = document.getElementById('preferences');
+                        if (prefSection) prefSection.scrollIntoView({behavior: 'smooth', block: 'start'});
                         return;
                     }
 
